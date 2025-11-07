@@ -144,83 +144,88 @@ void test_case_3x3() {
     CUDA_CHECK(cudaFree(out_gpu));
 }
 
-// // Generate a random SPD matrix of size N x N
-// void generate_spd_matrix(uint32_t N, float* A) {
-//     float* L = (float*)malloc(N * N * sizeof(float));
+// Generate a random SPD matrix of size N x N
+void generate_spd_matrix(uint32_t N, float* A) {
+    float* L = (float*)malloc(N * N * sizeof(float));
 
-//     // Fill L lower-triangular with random positive numbers
-//     for (uint32_t i = 0; i < N; ++i) {
-//         for (uint32_t j = 0; j <= i; ++j) {
-//             L[i*N + j] = (float)(rand() % 10 + 1);
-//         }
-//         for (uint32_t j = i+1; j < N; ++j) {
-//             L[i*N + j] = 0.0f;
-//         }
-//     }
+    // Fill L lower-triangular with random positive numbers
+    for (uint32_t i = 0; i < N; ++i) {
+        for (uint32_t j = 0; j <= i; ++j) {
+            L[i*N + j] = (float)(rand() % 10 + 1);
+        }
+        for (uint32_t j = i+1; j < N; ++j) {
+            L[i*N + j] = 0.0f;
+        }
+    }
 
-//     // Compute A = L * L^T
-//     for (uint32_t i = 0; i < N; ++i) {
-//         for (uint32_t j = 0; j < N; ++j) {
-//             float sum = 0.0f;
-//             for (uint32_t k = 0; k <= (i<j?i:j); ++k) {
-//                 sum += L[i*N + k] * L[j*N + k];
-//             }
-//             A[i*N + j] = sum;
-//         }
-//     }
+    // Compute A = L * L^T
+    for (uint32_t i = 0; i < N; ++i) {
+        for (uint32_t j = 0; j < N; ++j) {
+            float sum = 0.0f;
+            for (uint32_t k = 0; k <= (i<j?i:j); ++k) {
+                sum += L[i*N + k] * L[j*N + k];
+            }
+            A[i*N + j] = sum;
+        }
+    }
 
-//     free(L);
-// }
+    free(L);
+}
 
-// // Test case for any size
-// void test_case(uint32_t N) {
-//     printf("Testing Cholesky %ux%u\n", N, N);
+// Test case for any size
+void test_case(uint32_t N) {
+    printf("Testing Cholesky %ux%u\n", N, N);
 
-//     float *in_gpu  = (float*)malloc(N * N * sizeof(float));
-//     float *out_gpu = (float*)malloc(N * N * sizeof(float));
+    float *in_cpu  = (float*)malloc(N * N * sizeof(float));
+    float *out_cpu = (float*)malloc(N * N * sizeof(float));
 
-//     CUDA_CHECK(cudaMalloc(&in_gpu, N * N * sizeof(float)));
-//     CUDA_CHECK(cudaMalloc(&out_gpu, N * N * sizeof(float)));
+    float *in_gpu, *out_gpu;
+    CUDA_CHECK(cudaMalloc(&in_gpu, N * N * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&out_gpu, N * N * sizeof(float)));
 
-//     // Generate SPD input
-//     generate_spd_matrix(N, in_gpu);
+    // Generate SPD input
+    generate_spd_matrix(N, in_cpu);
 
-//     // Copy input to device (if needed)
-//     CUDA_CHECK(cudaMemcpy(in_gpu, in_gpu, N * N * sizeof(float), cudaMemcpyHostToDevice));
+    // Copy input to device
+    CUDA_CHECK(cudaMemcpy(in_gpu, in_cpu, N * N * sizeof(float), cudaMemcpyHostToDevice));
 
-//     // Run Cholesky (gpu version here, replace with GPU kernel if desired)
-//     launch_cholesky_gpu_naive(N, in_gpu, out_gpu);
+    // Run Cholesky
+    launch_cholesky_gpu_naive(N, in_gpu, out_gpu);
 
-//     // Verify: L * L^T ≈ original matrix
-//     bool test_failed = false;
-//     float tol = 1e-5f;
+    // Copy result back to host
+    CUDA_CHECK(cudaMemcpy(out_cpu, out_gpu, N * N * sizeof(float), cudaMemcpyDeviceToHost));
 
-//     for (uint32_t i = 0; i < N; ++i) {
-//         for (uint32_t j = 0; j < N; ++j) {
-//             float sum = 0.0f;
-//             for (uint32_t k = 0; k <= (i<j?i:j); ++k) {
-//                 sum += out_gpu[i*N + k] * out_gpu[j*N + k];
-//             }
-//             if (fabsf(sum - in_gpu[i*N + j]) > tol) {
-//                 printf("Mismatch at (%u,%u): computed %f, expected %f\n", i, j, sum, in_gpu[i*N + j]);
-//                 test_failed = true;
-//             }
-//         }
-//     }
+    // Verify: L * L^T ≈ original matrix
+    bool test_failed = false;
+    float tol = 1e-5f;
 
-//     if (!test_failed) {
-//         printf("Test %ux%u passed\n", N, N);
-//     } else {
-//         printf("Test %ux%u FAILED\n", N, N);
-//     }
+    for (uint32_t i = 0; i < N; ++i) {
+        for (uint32_t j = 0; j < N; ++j) {
+            float sum = 0.0f;
+            for (uint32_t k = 0; k <= (i<j?i:j); ++k) {
+                sum += out_cpu[i*N + k] * out_cpu[j*N + k];
+            }
+            if (fabsf(sum - in_cpu[i*N + j]) > tol) {
+                printf("Mismatch at (%u,%u): computed %f, expected %f\n", i, j, sum, in_cpu[i*N + j]);
+                test_failed = true;
+            }
+        }
+    }
 
-//     free(in_gpu);
-//     free(out_gpu);
-//     CUDA_CHECK(cudaFree(in_gpu));
-//     CUDA_CHECK(cudaFree(out_gpu));
-// }
+    if (!test_failed) {
+        printf("Test %ux%u passed\n", N, N);
+    } else {
+        printf("Test %ux%u FAILED\n", N, N);
+    }
+
+    free(in_cpu);
+    free(out_cpu);
+    CUDA_CHECK(cudaFree(in_gpu));
+    CUDA_CHECK(cudaFree(out_gpu));
+}
 
 int main(int argc, char **argv) {
     printf("Testing GPU naive\n");
     test_case_3x3();
+    test_case(50);
 }
