@@ -28,6 +28,9 @@ void cholesky_cpu_naive(
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// Test harness
+
 void test_case_3x3() {
     // Test case
     const uint32_t size_i = 3;
@@ -57,7 +60,7 @@ void test_case_3x3() {
     for (uint32_t i = 0; i < size_i; ++i) {
         for (uint32_t j = i + 1; j < size_j; ++j) {
             if (out_cpu[i * size_j + j] != 0.0f) {
-                printf("Test 3x3 failed: upper triangle should be 0");
+                printf("Test 3x3 failed: upper triangle at (%u, %u) should be 0\n", i, j);
                 test_failed = true;
                 break;
             }
@@ -65,28 +68,28 @@ void test_case_3x3() {
     }
     // Verify lower triangle
     if (out_cpu[0] != 2.0f) {
-        printf("Test 3x3 failed: lower triangle at 0,0 should be 2");
+        printf("Test 3x3 failed: lower triangle at (0, 0) should be 2\n");
         test_failed = true;
     } else if (out_cpu[3] != 6.0f) {
-        printf("Test 3x3 failed: lower triangle at 1,0 should be 6");
+        printf("Test 3x3 failed: lower triangle at (1, 0) should be 6\n");
         test_failed = true;
     } else if (out_cpu[4] != 1.0f) {
-        printf("Test 3x3 failed: lower triangle at 1,1 should be 1");
+        printf("Test 3x3 failed: lower triangle at (1, 1) should be 1\n");
         test_failed = true;
     } else if (out_cpu[6] != -8.0f) {
-        printf("Test 3x3 failed: lower triangle at 2,0 should be -8");
+        printf("Test 3x3 failed: lower triangle at (2, 0) should be -8\n");
         test_failed = true;
     } else if (out_cpu[7] != 5.0f) {
-        printf("Test 3x3 failed: lower triangle at 2,1 should be 5");
+        printf("Test 3x3 failed: lower triangle at (2, 1) should be 5\n");
         test_failed = true;
     } else if (out_cpu[8] != 3.0f) {
-        printf("Test 3x3 failed: lower triangle at 2,2 should be 3");
+        printf("Test 3x3 failed: lower triangle at (2, 2) should be 3\n");
         test_failed = true;
     }
 
     if (!test_failed) {
         // Test passed
-        printf("Test 3x3 passed");
+        printf("Test 3x3 passed\n");
     }
 
     // Clean up memory
@@ -95,5 +98,6 @@ void test_case_3x3() {
 }
 
 int main(int argc, char **argv) {
+    printf("Testing CPU naive\n");
     test_case_3x3();
 }
