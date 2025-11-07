@@ -6,25 +6,24 @@
 // CPU Reference Implementation (Too slow to actually run!)
 
 void cholesky_cpu_naive(
-    uint32_t size_i, uint32_t size_j,
-    float const *in, float *out
+    const uint32_t n, float const *in, float *out
 ) {
     // Iterate over all rows
-    for (uint32_t i = 0; i < size_i; ++i) {
+    for (uint32_t i = 0; i < n; ++i) {
         // Iterate over lower triangle off-diagonal cols
         for (uint32_t j = 0; j < i; ++j) {
-            float l_ij = in[i * size_j + j];
+            float l_ij = in[i * n + j];
             for (uint32_t k = 0; k < j; ++k) {
-                l_ij -= out[i * size_j + k] * out[j * size_j + k];
+                l_ij -= out[i * n + k] * out[j * n + k];
             }
-            out[i * size_j + j] = l_ij / out[j * size_j + j];
+            out[i * n + j] = l_ij / out[j * n + j];
         }
         // Handle diagonal col
-        float l_ij = in[i * size_j + i];
+        float l_ij = in[i * n + i];
         for (uint32_t k = 0; k < i; ++k) {
-            l_ij -= out[i * size_j + k] * out[i * size_j + k];
+            l_ij -= out[i * n + k] * out[i * n + k];
         }
-        out[i * size_j + i] = sqrtf(l_ij);
+        out[i * n + i] = sqrtf(l_ij);
     }
 }
 
@@ -33,12 +32,11 @@ void cholesky_cpu_naive(
 
 void test_case_3x3() {
     // Test case
-    const uint32_t size_i = 3;
-    const uint32_t size_j = 3;
+    const uint32_t n = 3;
 
     // Allocate host memory
-    float *in_cpu = static_cast<float*>(malloc(size_i * size_j * sizeof(float)));
-    float *out_cpu = static_cast<float*>(malloc(size_i * size_j * sizeof(float)));
+    float *in_cpu = static_cast<float*>(malloc(n * n * sizeof(float)));
+    float *out_cpu = static_cast<float*>(malloc(n * n * sizeof(float)));
 
     // Fill in test data on host
     in_cpu[0] = 4.0f;
@@ -52,14 +50,14 @@ void test_case_3x3() {
     in_cpu[8] = 98.0f;
 
     // Run Cholesky decomposition
-    cholesky_cpu_naive(size_i, size_j, in_cpu, out_cpu);
+    cholesky_cpu_naive(n, in_cpu, out_cpu);
 
     // Verify output
     bool test_failed = false;
     // Verify upper triangle
-    for (uint32_t i = 0; i < size_i; ++i) {
-        for (uint32_t j = i + 1; j < size_j; ++j) {
-            if (out_cpu[i * size_j + j] != 0.0f) {
+    for (uint32_t i = 0; i < n; ++i) {
+        for (uint32_t j = i + 1; j < n; ++j) {
+            if (out_cpu[i * n + j] != 0.0f) {
                 printf("Test 3x3 failed: upper triangle at (%u, %u) should be 0\n", i, j);
                 test_failed = true;
                 break;
