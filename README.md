@@ -1,0 +1,1 @@
+Final project for MIT 6.S894, a graduate coarse in accelerated computing, focusing specifically on GPU accelerators (see more here: https://accelerated-computing.academy/fall25/). This project focuses on efficient implementations of Cholesky decomposition.
