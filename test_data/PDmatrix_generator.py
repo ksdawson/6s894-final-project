@@ -37,6 +37,14 @@ def cholesky_decomposition(A):
     L = np.linalg.cholesky(A)
     return L
 
+def read_matrix_from_bin(filename):
+    """
+    Read a matrix from a binary file.
+    filename: path to input binary file
+    return: numpy array (2D matrix)
+    """
+    A = np.fromfile(filename, dtype=np.float32)
+    return A.reshape(n, n)
 
 if __name__ == "__main__":
     n = [64, 128, 256, 512, 1024, 2048, 4096]
@@ -45,3 +53,4 @@ if __name__ == "__main__":
         save_matrix_to_bin(A, f"PDmatrix_{n}x{n}.bin")
         L = cholesky_decomposition(A)
         save_matrix_to_bin(L, f"Cholesky_{n}x{n}.bin")
+        A = read_matrix_from_bin(f"PDmatrix_{n}x{n}.bin")
