@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cuda_runtime.h>
+#include <filesystem>
 #include <math.h>
 #include <stdio.h>
 
@@ -19,6 +20,61 @@
 
 ////////////////////////////////////////////////////////////////////////////////
 // Substitution methods
+
+__device__ void index2rowcol(uint32_t *row, uint32_t *col, uint32_t k) {
+  uint32_t r = (uint32_t)floorf((sqrtf(8.0f * k + 1.0f) - 1.0f) * 0.5f);
+  uint32_t tr = r * (r + 1) / 2;
+
+  *row = r;
+  *col = k - tr;
+}
+
+template <uint32_t blocksize>
+__device__ void blockSolve(uint32_t n, float const *A, float *x,
+                           float const *b) {
+
+  constexpr uint32_t numel = (blocksize * (blocksize + 1)) / 2;
+  uint32_t tid = threadIdx.x;
+  uint32_t bdim = blockDim.x;
+
+  __shared__ float sh_A[numel];
+  __shared__ float sh_x[blocksize];
+
+  for (uint32_t k = tid; k < numel; k += bdim) {
+    uint32_t i, j;
+    index2rowcol(&i, &j, k);
+    sh_A[k] = A[i * n + j];
+  }
+
+  for (uint32_t k = tid; k < blocksize; k += bdim) {
+    sh_x[k] = b[k];
+  }
+
+  __syncthreads();
+
+  for (uint32_t i = 0; i < blocksize; ++i) {
+
+    if (tid == 0) {
+      uint32_t diag_idx = i * (i + 1) / 2 + i;
+      float val = sh_x[i] / sh_A[diag_idx];
+      sh_x[i] = val;
+    }
+
+    __syncthreads();
+
+    float x_i = sh_x[i];
+
+    for (uint32_t j = i + 1 + tid; j < blocksize; j += bdim) {
+      uint32_t A_ji_idx = j * (j + 1) / 2 + i;
+      sh_x[j] -= sh_A[A_ji_idx] * x_i;
+    }
+    __syncthreads();
+  }
+
+  for (uint32_t k = tid; k < blocksize; k += bdim) {
+    x[k] = sh_x[k];
+  }
+}
 
 template <bool x_row, bool b_row>
 __device__ void forward_substitution(const uint32_t n, float const *A, float *x,
@@ -55,7 +111,8 @@ __device__ void forward_substitution(const uint32_t n, float const *A, float *x,
 
 __global__ void forward_substitution_kernel(uint32_t n, const float *A,
                                             float *x, const float *b) {
-  forward_substitution<true, true>(n, A, x, b);
+  // forward_substitution<true, true>(n, A, x, b);
+  blockSolve<16>(n, A, x, b);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -239,8 +296,8 @@ void test_trsm(uint32_t N) {
 int main() {
   srand(0);
   // Test forward substitution
-  test_forward_substitution(4);
-  test_forward_substitution(8);
+  // test_forward_substitution(4);
+  // test_forward_substitution(8);
   test_forward_substitution(16);
   // test_forward_substitution(1024);
   // Test trsm
