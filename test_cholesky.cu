@@ -1,6 +1,6 @@
 // TL+ {"compile_flags": ["-lcuda"]}
 // TL+ {"header_files": ["utils.cuh", "cholesky_naive.cuh"]}
-// TL {"workspace_files": ["PDmatrix_64x64.bin"]}
+// TL {"workspace_files": ["PDmatrix_16x3072.bin"]}
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -317,8 +317,8 @@ int main(int argc, char **argv) {
     // std::string current_dir = std::filesystem::current_path().string();
     // std::cout << "Current directory: " << current_dir << std::endl;
     // std::string test_data_dir = ".";
-    std::ifstream file("PDmatrix_64x64.bin", std::ios::binary);
-    std::vector<float> data(64*64);
+    std::ifstream file("./PDmatrix_16x3072.bin", std::ios::binary);
+    std::vector<float> data(16*3072);
     file.read(reinterpret_cast<char *>(data.data()), data.size() * sizeof(float));
     if (file.fail()) {
         std::cerr << "Failed to read " << "PDmatrix_16x3072.bin" << std::endl;

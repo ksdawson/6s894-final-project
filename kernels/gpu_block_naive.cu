@@ -4,11 +4,10 @@
 #include <math.h>
 
 // Macro to check CUDA errors
-#define CUDA_CHECK(err) \
-    if ((err) != cudaSuccess) { \
-        fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
-        exit(EXIT_FAILURE); \
-    }
+#define CUDA_CHECK(x) \
+  do { \
+      utils::cuda_check((x), __FILE__, __LINE__); \
+  } while (0)
 
 // Helpers
 template <typename T>

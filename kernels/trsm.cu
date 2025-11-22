@@ -10,12 +10,10 @@
 #include <stdio.h>
 
 // Macro to check CUDA errors
-#define CUDA_CHECK(err)                                                        \
-  if ((err) != cudaSuccess) {                                                  \
-    fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__,           \
-            cudaGetErrorString(err));                                          \
-    exit(EXIT_FAILURE);                                                        \
-  }
+#define CUDA_CHECK(x) \
+  do { \
+      utils::cuda_check((x), __FILE__, __LINE__); \
+  } while (0)
 
 ////////////////////////////////////////////////////////////////////////////////
 // Substitution methods
@@ -83,6 +81,58 @@ __device__ void trsm(const uint32_t n, float const *A, float *X,
 __global__ void trsm_kernel(uint32_t n, const float *A, float *X,
                             const float *B) {
   trsm(n, A, X, B);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// TRSM solves A * X^T = B, so we need to transpose the kernel
+__global__ void trsm_transpose_kernel_XY(const uint32_t n, float const *A, float *X, float const *B) {
+
+  int32_t col_ID = threadIdx.x;
+  for (uint32_t i = 0; i < n; ++i) {
+
+    float sum = B[i*n + col_ID];
+
+    for (uint32_t k = 0; k < i; ++k) {
+      sum -= A[i*n+k] * X[col_ID*n + k];
+    }
+    sum /= A[i*n+i];
+    if (col_ID < n) {
+      X[col_ID*n + i] = sum;
+    }
+    __syncthreads();
+  }
+}
+
+// TRSM solves A * X = B
+__global__ void trsm_kernel_XY(const uint32_t n, float const *A, float *X, float const *B) {
+
+  int32_t col_ID = threadIdx.x;
+  for (uint32_t i = 0; i < n; ++i) {
+
+    float sum = B[i*n + col_ID];
+
+    for (uint32_t k = 0; k < i; ++k) {
+      sum -= A[i*n+k] * X[k*n + col_ID];
+    }
+    sum /= A[i*n+i];
+    if (col_ID < n) {
+      X[i*n + col_ID] = sum;
+    }
+    __syncthreads();
+  }
+
+  // if (threadIdx.x == 31) {
+  //   for (uint32_t i = 0; i < n*n; ++i) {
+  //     printf("A[%u] = %f\n", i, A[i]);
+  //   }
+  //   for (uint32_t i = 0; i < n*n; ++i) {
+  //     printf("B[%u] = %f\n", i, B[i]);
+  //   }
+  // }
+}
+
+void launch_trsm_kernel_XY(const uint32_t n, float const *A, float *X, float const *B) {
+  trsm_transpose_kernel_XY<<<1, 32>>>(n, A, X, B);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -204,7 +254,7 @@ void test_trsm(uint32_t N) {
   CUDA_CHECK(cudaMemset(X_d, 0, N * N * sizeof(float)));
 
   // Launch kernel (1 block, multiple warps)
-  trsm_kernel<<<1, 32 * 32>>>(N, L_d, X_d, B_d);
+  trsm_transpose_kernel_XY<<<1, 32 * 32>>>(N, L_d, X_d, B_d);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   CUDA_CHECK(
@@ -239,14 +289,14 @@ void test_trsm(uint32_t N) {
 int main() {
   srand(0);
   // Test forward substitution
-  test_forward_substitution(4);
-  test_forward_substitution(8);
-  test_forward_substitution(16);
+  // test_forward_substitution(4);
+  // test_forward_substitution(8);
+  // test_forward_substitution(16);
   // test_forward_substitution(1024);
   // Test trsm
-  // test_trsm(2);
-  // test_trsm(4);
-  // test_trsm(8);
-  // test_trsm(16);
+  test_trsm(2);
+  test_trsm(4);
+  test_trsm(8);
+  //test_trsm(16);
   return 0;
 }

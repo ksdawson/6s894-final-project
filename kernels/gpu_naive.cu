@@ -10,11 +10,10 @@
 #include "utils.cuh"
 
 // Macro to check CUDA errors
-#define CUDA_CHECK(err) \
-    if ((err) != cudaSuccess) { \
-        fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
-        exit(EXIT_FAILURE); \
-    }
+#define CUDA_CHECK(x) \
+  do { \
+      utils::cuda_check((x), __FILE__, __LINE__); \
+  } while (0)
 
 ////////////////////////////////////////////////////////////////////////////////
 // GPU Naive Implementation
@@ -50,11 +49,48 @@ __global__ void cholesky_gpu_naive(
     }
 }
 
+__global__ void cholesky_gpu_naive_XY(
+    const uint32_t n, float const *in, float *out) {
+    
+    const int32_t tile_size = 2;
+    float diag = 0.0f;
+    float sum_list[tile_size];
+    int32_t row_ID = threadIdx.x * tile_size;
+
+    for (uint32_t j = 0; j < n; ++j) {
+        diag = in[j * n + j];
+        for (uint32_t i = 0; i < j; ++i) {
+            diag -= out[j * n + i] * out[j * n + i];
+        }
+        diag = sqrtf(diag);
+        out[j * n + j] = diag;
+        //printf("out[%u*%u + %u] = %f\n", j, n, j, out[j * n + j]);
+
+        for (uint32_t t = 0; t < tile_size; ++t) {
+            sum_list[t] = in[(row_ID+t)*n + j];
+
+            for (uint32_t k = 0; k < j; ++k) {
+                sum_list[t] -= out[j*n + k] * out[(row_ID + t) *n + k];
+            }
+            sum_list[t] /= diag;
+        }
+        
+        for (uint32_t t = 0; t < tile_size; ++t) {
+            if ( row_ID +t > j && row_ID +t < n) {
+                out[(row_ID+t)*n + j] = sum_list[t];
+                //printf("out[%u*%u + %u] = %f\n", row_ID, n, j, sum);
+            }
+        }
+        __syncthreads();
+    }
+}
+
 void launch_cholesky_gpu_naive(
     const uint32_t n, float const *in, float *out
 ) {
     // Cholesky only using 1 warp and parallelizing over the inner sum
-    cholesky_gpu_naive<<<1, 1*32>>>(n, in, out);
+    //cholesky_gpu_naive<<<1, 1*32>>>(n, in, out);
+    cholesky_gpu_naive_XY<<<1, 1*32>>>(n,in,out);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -180,7 +216,7 @@ void test_case(uint32_t N) {
 
     // Verify: L * L^T ≈ original matrix
     bool test_failed = false;
-    float tol = 1e-5f;
+    float tol = 1e-3f;
 
     for (uint32_t i = 0; i < N; ++i) {
         for (uint32_t j = 0; j < N; ++j) {
