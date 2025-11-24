@@ -98,6 +98,7 @@ void test_triblock(uint32_t N, uint32_t block_n) {
     float *A_gpu = (float *)malloc(N * block_n * N * block_n * sizeof(float));
     float *X_true = (float *)malloc(N * block_n * N * block_n * sizeof(float));
     float *X_gpu = (float *)malloc(N * block_n * N * block_n * sizeof(float));
+    float *A_rep = (float *)malloc(N * block_n * N * block_n * sizeof(float));
 
     // Generate random X_true matrix
     generate_lower_triangular(N, block_n, X_true, 0, 0);
@@ -116,8 +117,11 @@ void test_triblock(uint32_t N, uint32_t block_n) {
     // calculate A = X_true * X_true^T
     for (uint32_t i = 0; i < N * block_n; ++i) {
         for (uint32_t j = 0; j < N * block_n; ++j) {
+            A[i * N * block_n + j] = 0.0f;
+            A_rep[i * N * block_n + j] = 0.0f;
             for (uint32_t k = 0; k < N * block_n; ++k) {
                 A[i * N * block_n + j] += X_true[i * N * block_n + k] * X_true[j * N * block_n + k];
+                A_rep[i * N * block_n + j] += X_true[i * N * block_n + k] * X_true[j * N * block_n + k];
             }
         }
     }
@@ -144,8 +148,10 @@ void test_triblock(uint32_t N, uint32_t block_n) {
         cudaMemcpy(X_gpu, X_d, N *block_n * N *block_n * sizeof(float), cudaMemcpyDeviceToHost));
     
     // Verify results
+
     for (uint32_t i = 0; i < N*block_n; ++i) {
         for (uint32_t j = 0; j < N*block_n; ++j) {
+            A_gpu[i * N*block_n + j] = 0.0f;
             for (uint32_t k = 0; k < N*block_n; ++k) {
                 A_gpu[i * N*block_n + j] += X_gpu[i * N*block_n + k] * X_gpu[j * N*block_n + k];
             }
@@ -154,6 +160,16 @@ void test_triblock(uint32_t N, uint32_t block_n) {
 
     bool failed = false;
     float tol = 1e-3f;
+
+    for (uint32_t i = 0; i < N*block_n; ++i) {
+        for (uint32_t j = 0; j < N*block_n; ++j) {
+            if (fabsf(A[i * N*block_n + j] - A_rep[i * N*block_n + j]) > tol) {
+                printf("A and A_rep mismatch at (%u, %u): got %.5f, expected %.5f\n", i, j, A[i * N*block_n + j], A_rep[i * N*block_n + j]);
+                failed = true;
+            }
+        }
+    }
+    
     for (uint32_t i = 0; i < N; ++i) {
         for (uint32_t j = 0; j < N; ++j) {
             if (fabsf(A_gpu[i * N + j] - A[i * N + j]) > tol) {
@@ -164,15 +180,28 @@ void test_triblock(uint32_t N, uint32_t block_n) {
     }
 
     if (!failed) {
-        printf("Test PASSED for N=%u\n", N);
+        printf("Test PASSED for N=%u, block_n=%u\n", N, block_n);
     } else {
-        printf("Test FAILED for N=%u\n", N);
+        printf("Test FAILED for N=%u, block_n=%u\n", N, block_n);
+    }
+
+    for (uint32_t i = 0; i < N*block_n; ++i) {
+        for (uint32_t j = 0; j < N*block_n; ++j) {
+            printf("A_gpu[%u, %u] = %f, A[%u, %u] = %f\n", i, j, A_gpu[i * N*block_n + j], i, j, A[i * N*block_n + j]);
+        }
+    }
+
+    for (uint32_t i = 0; i < N*block_n; ++i) {
+        for (uint32_t j = 0; j < N*block_n; ++j) {
+            printf("X_gpu[%u, %u] = %f, X_true[%u, %u] = %f\n", i, j, X_gpu[i * N*block_n + j], i, j, X_true[i * N*block_n + j]);
+        }
     }
 
     free(A);
     free(A_gpu);
     free(X_true);
     free(X_gpu);
+    free(A_rep);
     CUDA_CHECK(cudaFree(A_d));
     CUDA_CHECK(cudaFree(X_d));
 }
@@ -183,5 +212,7 @@ int main() {
     test_triblock(3, 2);
     //test_triblock(8, 2);
     test_triblock(4, 4);
+    test_triblock(10, 10);
+    //test_triblock(10, 32);
     return 0;
 }

@@ -49,36 +49,85 @@ __global__ void cholesky_gpu_naive(
     }
 }
 
+// Cholesky decomposition with parallelization over off-diagonal elements of the jth column
+// need to update tile_size > n/32
 __global__ void cholesky_gpu_naive_XY(
     const uint32_t n, float const *in, float *out) {
     
-    const int32_t tile_size = 2;
-    float diag = 0.0f;
+    const int32_t tile_size = 4;
+    float tmp = 0.0f;
     float sum_list[tile_size];
     int32_t row_ID = threadIdx.x * tile_size;
 
     for (uint32_t j = 0; j < n; ++j) {
-        diag = in[j * n + j];
+        float diag = 0;
+        tmp = 0.0f;
+        //if (j == 30) printf("thread %u diag = %f\n", threadIdx.x, diag);
         for (uint32_t i = 0; i < j; ++i) {
-            diag -= out[j * n + i] * out[j * n + i];
+            tmp += out[j * n + i] * out[j * n + i];
+            //if (j == 30) printf("thread %u diag = %f\n", threadIdx.x, diag);
         }
-        diag = sqrtf(diag);
-        out[j * n + j] = diag;
-        //printf("out[%u*%u + %u] = %f\n", j, n, j, out[j * n + j]);
+        //if (j == 30) printf("thread %u diag = %f\n", threadIdx.x, diag);
+        diag = sqrtf(in[j * n + j] - tmp);
+        if (threadIdx.x == 0) {
+            out[j * n + j] = diag;
+        }
+        __syncthreads();
 
         for (uint32_t t = 0; t < tile_size; ++t) {
-            sum_list[t] = in[(row_ID+t)*n + j];
+            sum_list[t] = 0;
 
             for (uint32_t k = 0; k < j; ++k) {
-                sum_list[t] -= out[j*n + k] * out[(row_ID + t) *n + k];
+                sum_list[t] += out[j*n + k] * out[(row_ID + t) *n + k];
             }
-            sum_list[t] /= diag;
-        }
-        
-        for (uint32_t t = 0; t < tile_size; ++t) {
             if ( row_ID +t > j && row_ID +t < n) {
-                out[(row_ID+t)*n + j] = sum_list[t];
-                //printf("out[%u*%u + %u] = %f\n", row_ID, n, j, sum);
+                out[(row_ID+t)*n + j] = (in[(row_ID+t)*n + j] - sum_list[t]) / diag;
+            }
+        }
+        __syncthreads();
+    }
+}
+
+// Cholesky decomposition with parallelization over inner sum and the off-diagonal elements of the jth column
+// need to update tile_size > n/32
+__global__ void cholesky_XY(
+    const uint32_t n, float const *in, float *out) {
+    
+    const int32_t tile_size = 4;
+    float tmp = 0.0f;
+    float diag = 0.0f;
+    float sum_list[tile_size];
+    int32_t row_ID = (threadIdx.x / 32) * tile_size;
+    int32_t warp_ID = threadIdx.x % 32;
+
+    for (uint32_t j = 0; j < n; ++j) {
+        // solving for the diagonal element of the jth column
+        tmp = 0.0f;
+        for (uint32_t i = 0; i < j; ++i) {
+            tmp += out[j * n + i] * out[j * n + i];
+        }
+        diag = sqrtf(in[j * n + j] - tmp);
+        if (threadIdx.x == 0) {
+            out[j * n + j] = diag;
+        }
+        __syncthreads();
+        //printf("out[%u*%u + %u] = %f\n", j, n, j, out[j * n + j]);
+
+        // solving for the off-diagonal elements of the jth column
+
+        for (uint32_t t = 0; t < tile_size; ++t) {
+            sum_list[t] = 0;
+
+            for (uint32_t k = warp_ID; k < j; k += 32) {
+                sum_list[t] += out[j*n + k] * out[(row_ID + t) *n + k];
+            }
+            sum_list[t] = utils::warp_prefix_sum<float>(sum_list[t]);
+
+            if (warp_ID == 31) {
+                sum_list[t] = (in[(row_ID+t)*n + j] - sum_list[t]) / diag;
+                if (row_ID + t > j && row_ID + t < n) {
+                    out[(row_ID+t)*n + j] = sum_list[t];
+                }
             }
         }
         __syncthreads();
@@ -90,7 +139,7 @@ void launch_cholesky_gpu_naive(
 ) {
     // Cholesky only using 1 warp and parallelizing over the inner sum
     //cholesky_gpu_naive<<<1, 1*32>>>(n, in, out);
-    cholesky_gpu_naive_XY<<<1, 1*32>>>(n,in,out);
+    cholesky_XY<<<1, 32*32>>>(n,in,out);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -153,6 +202,12 @@ void test_case_3x3() {
         test_failed = true;
     }
 
+    for (uint32_t i = 0; i < n; ++i) {
+        for (uint32_t j = 0; j < n; ++j) {
+            printf("cpu[%u, %u] = %f\n", i, j, cpu[i*n + j]);
+        }
+    }
+
     if (!test_failed) {
         // Test passed
         printf("Test 3x3 passed\n");
@@ -174,6 +229,12 @@ void generate_spd_matrix(uint32_t N, float* A) {
         }
         for (uint32_t j = i+1; j < N; ++j) {
             L[i*N + j] = 0.0f;
+        }
+        
+    }
+    for (uint32_t i = 0; i < N; ++i) {
+        for (uint32_t j = 0; j < N; ++j) {
+            printf("L[%u, %u] = %f\n", i, j, L[i*N + j]);
         }
     }
 
@@ -224,10 +285,19 @@ void test_case(uint32_t N) {
             for (uint32_t k = 0; k <= (i<j?i:j); ++k) {
                 sum += out_cpu[i*N + k] * out_cpu[j*N + k];
             }
-            if (fabsf(sum - in_cpu[i*N + j]) > tol) {
+            if (fabsf(sum - in_cpu[i*N + j]) < tol) {
+                // printf("in_cpu[%u, %u] = %f, sum = %f\n", i, j, in_cpu[i*N + j], sum);
+                continue;
+            } else {
                 printf("Mismatch at (%u,%u): computed %f, expected %f\n", i, j, sum, in_cpu[i*N + j]);
                 test_failed = true;
             }
+        }
+    }
+
+    for (uint32_t i = 0; i < N; ++i) {
+        for (uint32_t j = 0; j < N; ++j) {
+            printf("out_cpu[%u, %u] = %f\n", i, j, out_cpu[i*N + j]);
         }
     }
 
@@ -235,7 +305,10 @@ void test_case(uint32_t N) {
         printf("Test %ux%u passed\n", N, N);
     } else {
         printf("Test %ux%u FAILED\n", N, N);
+
+        
     }
+    
 
     free(in_cpu);
     free(out_cpu);
@@ -244,7 +317,8 @@ void test_case(uint32_t N) {
 }
 
 int main(int argc, char **argv) {
+    srand(0);
     printf("Testing GPU naive\n");
     test_case_3x3();
-    test_case(50);
+    test_case(100);
 }

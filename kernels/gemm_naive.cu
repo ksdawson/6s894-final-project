@@ -24,13 +24,14 @@ __global__ void gemm_kernel_XY(
     int32_t col_ID = threadIdx.x % n;
     int32_t row_ID = threadIdx.x / n;
 
-    float sum = A[(A_col_offset + row_ID) * n + (A_row_offset + col_ID)];
+    float sum = 0;
+    //A[(A_col_offset + row_ID) * n + (A_row_offset + col_ID)];
     for (uint32_t i = 0; i < n; ++i) {
-        sum -= B[(B_col_offset + row_ID) * n + (B_row_offset + i)] * B[(B_col_offset + col_ID) * n + (B_row_offset + i)];
+        sum += B[(B_col_offset + row_ID) * n + (B_row_offset + i)] * B[(B_col_offset + col_ID) * n + (B_row_offset + i)];
     }
 
     if (row_ID < n && col_ID < n) {
-        out[row_ID * n + col_ID] = sum;
+        out[row_ID * n + col_ID] = A[(A_col_offset + row_ID) * n + (A_row_offset + col_ID)] -sum;
     }
 }
 
@@ -101,12 +102,18 @@ void test_gemm(uint32_t N) {
     bool failed = false;
     float tol = 1e-3f;
     for (uint32_t i = 0; i < N * N; ++i) {
-        if (fabsf(X_gpu[i] - X_true[i]) > tol) {
+        if (fabsf(X_gpu[i] - X_true[i]) < tol) {
+            continue;
+        } else {
             printf("Mismatch at (%u): got %.5f, expected %.5f\n", i, X_gpu[i],
                     X_true[i]);
             failed = true;
         }
     }
+
+    // for (uint32_t i = 0; i < N * N; ++i) {
+    //     printf("X_gpu[%u] = %f, X_true[%u] = %f\n", i, X_gpu[i], i, X_true[i]);
+    // }
 
     if (!failed) {
         printf("Test PASSED for N=%u\n", N);
@@ -128,6 +135,6 @@ int main() {
 
     test_gemm(2);
     test_gemm(4);
-    test_gemm(8);
+    test_gemm(32);
     return 0;
 }

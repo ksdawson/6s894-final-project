@@ -74,7 +74,7 @@ __device__ void cholesky_parallel_col_XY(
     float diag = 0.0f;
     float sum_list[tile_size];
     int32_t row_ID = threadIdx.x * tile_size;
-    if (threadIdx.x * tile_size >= block_n) row_ID = 0;
+    if (row_ID >= block_n) row_ID = 0;
 
     for (uint32_t j = 0; j < block_n; ++j) {
         diag = in[j * dim_in + j];
@@ -98,6 +98,54 @@ __device__ void cholesky_parallel_col_XY(
             if (row_ID +t > j && row_ID +t < block_n) {
                 out[(out_col_offset + row_ID + t) * dim_out + (out_row_offset + j)] = sum_list[t];
                 //printf("out[%u*%u + %u] = %f\n", row_ID, n, j, sum);
+            }
+        }
+        __syncthreads();
+    }
+}
+
+__device__ void cholesky_XY(
+    const uint32_t dim_in, 
+    const uint32_t N, const uint32_t block_n, float const *in, float *out,
+    uint32_t out_col_offset, uint32_t out_row_offset) {
+    
+    const uint32_t dim_out = N * block_n;
+    const int32_t tile_size = 4;
+    float diag = 0.0f;
+    float sum_list[tile_size];
+    float tmp[tile_size];
+    int32_t row_ID = (threadIdx.x / 32) * tile_size;
+    int32_t warp_ID = threadIdx.x % 32;
+    if (row_ID >= block_n) row_ID = 0;
+
+    for (uint32_t j = 0; j < block_n; ++j) {
+        // solving for the diagonal element of the jth column
+        diag = in[j * dim_in + j];
+        for (uint32_t i = 0; i < j; ++i) {
+            diag -= out[(out_col_offset + j) * dim_out + (out_row_offset + i)] * out[(out_col_offset + j) * dim_out + (out_row_offset + i)];
+        }
+        diag = sqrtf(diag);
+        out[(out_col_offset + j) * dim_out + (out_row_offset + j)] = diag;
+        //printf("out[%u*%u + %u] = %f\n", j, n, j, out[j * n + j]);
+
+        // solving for the off-diagonal elements of the jth column
+        for (uint32_t t = 0; t < tile_size; ++t) {
+            tmp[t] = 0.0f;
+        }
+
+        for (uint32_t t = 0; t < tile_size; ++t) {
+            sum_list[t] = in[(row_ID+t)*dim_in + j];
+
+            for (uint32_t k = warp_ID; k < j; k += 32) {
+                tmp[t] += out[(out_col_offset + j)*dim_out + out_row_offset + k] * out[(out_col_offset + row_ID + t) *dim_out + out_row_offset + k];
+            }
+
+            tmp[t] = utils::warp_prefix_sum<float>(tmp[t]);
+            if (warp_ID == 31) {
+                sum_list[t] = (sum_list[t] - tmp[t]) / diag;
+                if (row_ID + t > j && row_ID + t < block_n) {
+                    out[(out_col_offset+row_ID+t)*dim_out + (out_row_offset + j)] = sum_list[t];
+                }
             }
         }
         __syncthreads();

@@ -324,6 +324,7 @@ int main(int argc, char **argv) {
         std::cerr << "Failed to read " << "PDmatrix_16x3072.bin" << std::endl;
         std::abort();
     }
+}
 
     // std::string test_data_dir = ".";
     // auto configs = std::vector<BenchmarkConfig>{

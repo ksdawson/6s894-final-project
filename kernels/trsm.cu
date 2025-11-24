@@ -90,12 +90,13 @@ __global__ void trsm_transpose_kernel_XY(const uint32_t n, float const *A, float
   int32_t col_ID = threadIdx.x;
   for (uint32_t i = 0; i < n; ++i) {
 
-    float sum = B[i*n + col_ID];
+    float sum = 0;
+    //B[i*n + col_ID];
 
     for (uint32_t k = 0; k < i; ++k) {
-      sum -= A[i*n+k] * X[col_ID*n + k];
+      sum += A[i*n+k] * X[col_ID*n + k];
     }
-    sum /= A[i*n+i];
+    sum = (B[i*n + col_ID] - sum) / A[i*n+i];
     if (col_ID < n) {
       X[col_ID*n + i] = sum;
     }
@@ -254,7 +255,7 @@ void test_trsm(uint32_t N) {
   CUDA_CHECK(cudaMemset(X_d, 0, N * N * sizeof(float)));
 
   // Launch kernel (1 block, multiple warps)
-  trsm_transpose_kernel_XY<<<1, 32 * 32>>>(N, L_d, X_d, B_d);
+  trsm_kernel<<<1, 32 * 32>>>(N, L_d, X_d, B_d);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   CUDA_CHECK(
@@ -264,11 +265,15 @@ void test_trsm(uint32_t N) {
   bool failed = false;
   float tol = 1e-3f;
   for (uint32_t i = 0; i < N * N; ++i) {
-    if (fabsf(X_gpu[i] - X_true[i]) > tol) {
+    printf("X_gpu[%u] = %f, X_true[%u] = %f\n", i, X_gpu[i], i, X_true[i]);
+    if (fabsf(X_gpu[i] - X_true[i]) < tol) {
+      continue;
+    } else {
       printf("Mismatch at (%u): got %.5f, expected %.5f\n", i, X_gpu[i],
              X_true[i]);
       failed = true;
     }
+    
   }
 
   if (!failed) {
@@ -296,7 +301,7 @@ int main() {
   // Test trsm
   test_trsm(2);
   test_trsm(4);
-  test_trsm(8);
+  test_trsm(32);
   //test_trsm(16);
   return 0;
 }
