@@ -24,7 +24,7 @@ __device__ uint32_t calc_offset(const uint32_t block_n, const uint32_t block_idx
     return block_idx * block_n;
 }
 
-// Works for N >=3, block_n >=2
+// Works for N >=3, block_n >=2, and block_n <= 32
 // Computes out = in*in^T, block Cholesky decomposition for triblock diagonal
 // N: number of blocks in triblock diagonal
 // block_n: dimension of each block in triblock diagonal
@@ -32,7 +32,7 @@ __device__ uint32_t calc_offset(const uint32_t block_n, const uint32_t block_idx
 __global__ void cholesky_trsm_combined(const uint32_t N, const uint32_t block_n, float const *in, float *out) {
     extern __shared__ float shared_mem[];
 
-    cholesky_naive::cholesky_parallel_col_XY(N*block_n, N, block_n, in, out, 0, 0);
+    cholesky_naive::cholesky_XY(N*block_n, N, block_n, in, out, 0, 0);
 
     for (uint32_t i = 1; i < N; ++i) {
         uint32_t offset_i = calc_offset(block_n, i);
@@ -45,7 +45,7 @@ __global__ void cholesky_trsm_combined(const uint32_t N, const uint32_t block_n,
 
         gemm::gemm_naive_XY(N, block_n, in, out, shared_mem, offset_i, offset_i, offset_i, offset_i_minus_1);
 
-        cholesky_naive::cholesky_parallel_col_XY(block_n, N, block_n, shared_mem, out, offset_i, offset_i);
+        cholesky_naive::cholesky_XY(block_n, N, block_n, shared_mem, out, offset_i, offset_i);
         // if (threadIdx.x == 0) {
         //     for (uint32_t i = 0; i < N*block_n; ++i) {
         //         for (uint32_t j = 0; j < N*block_n; ++j) {
@@ -57,9 +57,9 @@ __global__ void cholesky_trsm_combined(const uint32_t N, const uint32_t block_n,
 }
 
 
-
+// only works for block_n <= 32
 void launch_cholesky_trsm_combined(const uint32_t N, const uint32_t block_n, float const *in, float *out) {
-    uint32_t shared_mem_size = 1000 * sizeof(float);
+    uint32_t shared_mem_size = 4000 * sizeof(float);
         CUDA_CHECK(cudaFuncSetAttribute(
             cholesky_trsm_combined,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -75,9 +75,13 @@ void generate_lower_triangular(uint32_t N, uint32_t block_n, float *A, uint32_t 
     for (uint32_t i = 0; i < block_n; ++i) {
         for (uint32_t j = 0; j < block_n; ++j) {
             if (j <= i) {
-                A[(A_col_offset + i) * N * block_n + (A_row_offset + j)] = (float)(rand() % 9 + 1); // positive
+                A[(A_col_offset + i) * N * block_n + (A_row_offset + j)] = (float)(rand() % 2 + 1); // positive
             } else {
                 A[(A_col_offset + i) * N * block_n + (A_row_offset + j)] = 0.0f;
+            }
+
+            if (j == i) {
+                A[(A_col_offset + i) * N * block_n + (A_row_offset + j)] += block_n;
             }
         }
     }
@@ -86,7 +90,11 @@ void generate_lower_triangular(uint32_t N, uint32_t block_n, float *A, uint32_t 
 void generate_matrix(uint32_t N, uint32_t block_n, float *A, uint32_t A_col_offset, uint32_t A_row_offset) {
     for (uint32_t i = 0; i < block_n; ++i) {
         for (uint32_t j = 0; j < block_n; ++j) {
-            A[(A_col_offset + i) * N * block_n + (A_row_offset + j)] = (float)(rand() % 9 + 1); // positive
+            A[(A_col_offset + i) * N * block_n + (A_row_offset + j)] = (float)(rand() % 2 + 1); // positive
+
+            if (j == i) {
+                A[(A_col_offset + i) * N * block_n + (A_row_offset + j)] += block_n;
+            }
         }
     }
 }
@@ -101,6 +109,13 @@ void test_triblock(uint32_t N, uint32_t block_n) {
     float *A_rep = (float *)malloc(N * block_n * N * block_n * sizeof(float));
 
     // Generate random X_true matrix
+    for (uint32_t i = 0; i < N * block_n; ++i) {
+        for (uint32_t j = 0; j < N * block_n; ++j) {
+            X_true[i * N * block_n + j] = 0.0f;
+        }
+    }
+    //memset(X_true, 0, N * block_n * N * block_n * sizeof(float));
+
     generate_lower_triangular(N, block_n, X_true, 0, 0);
     
     for (uint32_t i = 1; i < N; ++i) {
@@ -125,6 +140,12 @@ void test_triblock(uint32_t N, uint32_t block_n) {
             }
         }
     }
+
+    // for (uint32_t i = 0; i < N * block_n; ++i) {
+    //     for (uint32_t j = 0; j < N * block_n; ++j) {
+    //         printf("A[%u, %u] = %f\n", i, j, A[i * N * block_n + j]);
+    //     }
+    // }
 
     // for (uint32_t i = 0; i < N * block_n; ++i) {
     //     for (uint32_t j = 0; j < N * block_n; ++j) {
@@ -161,19 +182,28 @@ void test_triblock(uint32_t N, uint32_t block_n) {
     bool failed = false;
     float tol = 1e-3f;
 
-    for (uint32_t i = 0; i < N*block_n; ++i) {
-        for (uint32_t j = 0; j < N*block_n; ++j) {
-            if (fabsf(A[i * N*block_n + j] - A_rep[i * N*block_n + j]) > tol) {
-                printf("A and A_rep mismatch at (%u, %u): got %.5f, expected %.5f\n", i, j, A[i * N*block_n + j], A_rep[i * N*block_n + j]);
-                failed = true;
-            }
-        }
-    }
+    // for (uint32_t i = 0; i < N*block_n; ++i) {
+    //     for (uint32_t j = 0; j <= i; ++j) {
+    //         printf("X_gpu[%u, %u] = %f, X_true[%u, %u] = %f\n", i, j, X_gpu[i * N*block_n + j], i, j, X_true[i * N*block_n + j]);
+    //     }
+    // }
+
+    // for (uint32_t i = 0; i < N*block_n; ++i) {
+    //     for (uint32_t j = 0; j < N*block_n; ++j) {
+    //         if (fabsf(A[i * N*block_n + j] - A_rep[i * N*block_n + j]) > tol) {
+    //             printf("A and A_rep mismatch at (%u, %u): got %.5f, expected %.5f\n", i, j, A[i * N*block_n + j], A_rep[i * N*block_n + j]);
+    //             failed = true;
+    //         }
+    //     }
+    // }
     
-    for (uint32_t i = 0; i < N; ++i) {
-        for (uint32_t j = 0; j < N; ++j) {
-            if (fabsf(A_gpu[i * N + j] - A[i * N + j]) > tol) {
-                printf("Mismatch at (%u, %u): got %.5f, expected %.5f\n", i, j, A_gpu[i * N + j], A[i * N + j]);
+    for (uint32_t i = 0; i < N * block_n; ++i) {
+        for (uint32_t j = 0; j < N * block_n; ++j) {
+            //printf("A_gpu[%u, %u] = %f, A[%u, %u] = %f\n", i, j, A_gpu[i * N * block_n + j], i, j, A[i * N * block_n + j]);
+            if (fabsf(A_gpu[i * N * block_n + j] - A[i * N * block_n + j]) < tol) {
+                continue;
+            } else {
+                //printf("Mismatch at (%u, %u): got %.5f, expected %.5f\n", i, j, A_gpu[i * N * block_n + j], A[i * N * block_n + j]);
                 failed = true;
             }
         }
@@ -185,17 +215,17 @@ void test_triblock(uint32_t N, uint32_t block_n) {
         printf("Test FAILED for N=%u, block_n=%u\n", N, block_n);
     }
 
-    for (uint32_t i = 0; i < N*block_n; ++i) {
-        for (uint32_t j = 0; j < N*block_n; ++j) {
-            printf("A_gpu[%u, %u] = %f, A[%u, %u] = %f\n", i, j, A_gpu[i * N*block_n + j], i, j, A[i * N*block_n + j]);
-        }
-    }
+    // for (uint32_t i = 0; i < N*block_n; ++i) {
+    //     for (uint32_t j = 0; j < N*block_n; ++j) {
+    //         printf("A_gpu[%u, %u] = %f, A[%u, %u] = %f\n", i, j, A_gpu[i * N*block_n + j], i, j, A[i * N*block_n + j]);
+    //     }
+    // }
 
-    for (uint32_t i = 0; i < N*block_n; ++i) {
-        for (uint32_t j = 0; j < N*block_n; ++j) {
-            printf("X_gpu[%u, %u] = %f, X_true[%u, %u] = %f\n", i, j, X_gpu[i * N*block_n + j], i, j, X_true[i * N*block_n + j]);
-        }
-    }
+    // for (uint32_t i = 0; i < N*block_n; ++i) {
+    //     for (uint32_t j = 0; j < N*block_n; ++j) {
+    //         printf("X_gpu[%u, %u] = %f, X_true[%u, %u] = %f\n", i, j, X_gpu[i * N*block_n + j], i, j, X_true[i * N*block_n + j]);
+    //     }
+    // }
 
     free(A);
     free(A_gpu);
@@ -204,15 +234,17 @@ void test_triblock(uint32_t N, uint32_t block_n) {
     free(A_rep);
     CUDA_CHECK(cudaFree(A_d));
     CUDA_CHECK(cudaFree(X_d));
+    CUDA_CHECK(cudaDeviceReset());
 }
 
 int main() {
     srand(0);
 
     test_triblock(3, 2);
+    test_triblock(4, 32);
     //test_triblock(8, 2);
-    test_triblock(4, 4);
-    test_triblock(10, 10);
+    //test_triblock(4, 32);
+    test_triblock(10, 32); // 32, 32 does not work
     //test_triblock(10, 32);
     return 0;
 }

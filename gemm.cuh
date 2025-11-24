@@ -25,13 +25,13 @@ __device__ void gemm_naive_XY(
     int32_t col_ID = threadIdx.x % block_n;
     int32_t row_ID = threadIdx.x / block_n;
 
-    float sum = A[(A_col_offset + row_ID) * dim + (A_row_offset + col_ID)];
+    float sum = 0.0f;
     for (uint32_t i = 0; i < block_n; ++i) {
-        sum -= B[(B_col_offset + row_ID) * dim + (B_row_offset + i)] * B[(B_col_offset + col_ID) * dim + (B_row_offset + i)];
+        sum += B[(B_col_offset + row_ID) * dim + (B_row_offset + i)] * B[(B_col_offset + col_ID) * dim + (B_row_offset + i)];
     }
 
     if (row_ID < block_n && col_ID < block_n) {
-        out[row_ID * block_n + col_ID] = sum;
+        out[row_ID * block_n + col_ID] = A[(A_col_offset + row_ID) * dim + (A_row_offset + col_ID)] - sum;
     }
 }
 } // namespace gemm_naive
