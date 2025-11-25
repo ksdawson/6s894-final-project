@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <math.h>
 #include <stdio.h>
+#include <vector>
 
 // Macro to check CUDA errors
 #define CUDA_CHECK(err)                                                        \
@@ -76,6 +77,40 @@ __device__ void blockSolve(uint32_t n, float const *A, float *x,
   }
 }
 
+template <uint32_t blocksize>
+__device__ void blockSubtract(uint32_t n, float const *A, float const *x,
+                              float *b) {
+  constexpr uint32_t numel = blocksize * blocksize;
+  uint32_t tid = threadIdx.x;
+  uint32_t bdim = blockDim.x;
+
+  __shared__ float sh_A[numel];
+  __shared__ float sh_x[blocksize];
+
+  for (uint32_t k = tid; k < numel; k += bdim) {
+    uint32_t i = k / blocksize;
+    uint32_t j = k % blocksize;
+    sh_A[k] = A[i * n + j];
+  }
+  for (uint32_t k = tid; k < blocksize; k += bdim) {
+    sh_x[k] = b[k];
+  }
+  __syncthreads();
+
+  for (uint32_t i = tid; i < blocksize; i += bdim) {
+
+    float dot = 0.0f;
+
+#pragma unroll
+    for (uint32_t j = 0; j < i + 1; ++j) {
+      uint32_t offset = i * (i + 1) / 2;
+      dot += sh_A[offset + j] * sh_x[j];
+    }
+
+    b[i] -= dot;
+  }
+}
+
 template <bool x_row, bool b_row>
 __device__ void forward_substitution(const uint32_t n, float const *A, float *x,
                                      float const *b) {
@@ -109,6 +144,94 @@ __device__ void forward_substitution(const uint32_t n, float const *A, float *x,
   }
 }
 
+template <uint32_t blocksize>
+__global__ void blockSolve_kernel(uint32_t n, float const *A, float *x,
+                                  float const *b) {
+  blockSolve<blocksize>(n, A, x, b);
+}
+
+template <uint32_t blocksize>
+__global__ void blockSubtract_kernel(uint32_t n, float const *A, float *x,
+                                     float const *b) {
+  blockSubtract<blocksize>(n, A, x, b);
+}
+
+template <uint32_t blocksize>
+void buildTriangularSolverGraph(cudaGraph_t &graph, int num_blocks,
+                                int n_stride, float *d_A, float *d_x,
+                                float *d_b) {
+
+  std::vector<cudaGraphNode_t> solve_nodes(num_blocks);
+  std::vector<std::vector<cudaGraphNode_t>> subtract_nodes(num_blocks);
+
+  for (int i = 0; i < num_blocks; i++)
+    subtract_nodes[i].resize(i + 1);
+
+  dim3 gridDim(1);
+  dim3 blockDim(blocksize * blocksize > 1024
+                    ? 1024
+                    : blocksize * blocksize); // NOTE: may be unnecessary
+
+  void *kernelArgs[4];
+
+  for (int col = 0; col < num_blocks; ++col) {
+    float *block_A = d_A + (col * blocksize * n_stride) + (col * blocksize);
+    float *block_x = d_x + (col * blocksize);
+    float *block_b = d_b + (col * blocksize);
+
+    cudaKernelNodeParams solve_params = {0};
+    solve_params.func = (void *)blockSolve_kernel<blocksize>;
+    solve_params.gridDim = gridDim;
+    solve_params.blockDim = blockDim;
+    solve_params.sharedMemBytes = 0;
+
+    kernelArgs[0] = &n_stride;
+    kernelArgs[1] = &block_A;
+    kernelArgs[2] = &block_x;
+    kernelArgs[3] = &block_b;
+    solve_params.kernelParams = kernelArgs;
+    solve_params.extra = NULL;
+
+    cudaGraphAddKernelNode(&solve_nodes[col], graph, NULL, 0, &solve_params);
+
+    if (col > 0) {
+      cudaGraphAddDependencies(graph, &subtract_nodes[col][col - 1],
+                               &solve_nodes[col], NULL, 1);
+    }
+
+    for (int row = col + 1; row < num_blocks; ++row) {
+
+      float *sub_A = d_A + (row * blocksize * n_stride) + (col * blocksize);
+      float *sub_x = d_x + (row * blocksize);
+      float *sub_b = d_b + (col * blocksize);
+
+      cudaKernelNodeParams sub_params = {0};
+      sub_params.func = (void *)blockSubtract_kernel<blocksize>;
+      sub_params.gridDim = gridDim;
+      sub_params.blockDim = blockDim;
+      sub_params.sharedMemBytes = 0;
+
+      kernelArgs[0] = &n_stride;
+      kernelArgs[1] = &sub_A;
+      kernelArgs[2] = &sub_x;
+      kernelArgs[3] = &sub_b;
+      sub_params.kernelParams = kernelArgs;
+      sub_params.extra = NULL;
+
+      cudaGraphAddKernelNode(&subtract_nodes[row][col], graph, NULL, 0,
+                             &sub_params);
+
+      cudaGraphAddDependencies(graph, &solve_nodes[col],
+                               &subtract_nodes[row][col], NULL, 1);
+
+      if (col > 0) {
+        cudaGraphAddDependencies(graph, &subtract_nodes[row][col - 1],
+                                 &subtract_nodes[row][col], NULL, 1);
+      }
+    }
+  }
+}
+
 __global__ void forward_substitution_kernel(uint32_t n, const float *A,
                                             float *x, const float *b) {
   // forward_substitution<true, true>(n, A, x, b);
@@ -124,8 +247,8 @@ __global__ void forward_substitution_kernel(uint32_t n, const float *A,
 
 __device__ void trsm(const uint32_t n, float const *A, float *X,
                      float const *B) {
-  // Assumes we're solving for X in A * X^T = B, so we can use rows of X instead
-  // of cols Get grid-level warp idx
+  // Assumes we're solving for X in A * X^T = B, so we can use rows of X
+  // instead of cols Get grid-level warp idx
   const uint32_t warps = blockDim.x / 32;
   const uint32_t warp_idx = warps * blockIdx.x + threadIdx.x / 32;
 
@@ -238,8 +361,8 @@ void test_trsm(uint32_t N) {
   }
 
   // Compute B = X_true * L^T (since trsm solves L * X^T = B, so B = X_true *
-  // L^T) Alternatively, if trsm is solving row-wise L*x = b, then B = X_true *
-  // L^T still fits.
+  // L^T) Alternatively, if trsm is solving row-wise L*x = b, then B = X_true
+  // * L^T still fits.
   for (uint32_t i = 0; i < N; ++i) {
     for (uint32_t j = 0; j < N; ++j) {
       float sum = 0.0f;
