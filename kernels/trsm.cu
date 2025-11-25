@@ -78,8 +78,7 @@ __device__ void blockSolve(uint32_t n, float const *A, float *x,
 }
 
 template <uint32_t blocksize>
-__device__ void blockSubtract(uint32_t n, float const *A, float const *x,
-                              float *b) {
+__device__ void blockSubtract(uint32_t n, float *A, float *x, float *b) {
   constexpr uint32_t numel = blocksize * blocksize;
   uint32_t tid = threadIdx.x;
   uint32_t bdim = blockDim.x;
@@ -151,8 +150,7 @@ __global__ void blockSolve_kernel(uint32_t n, float const *A, float *x,
 }
 
 template <uint32_t blocksize>
-__global__ void blockSubtract_kernel(uint32_t n, float const *A, float *x,
-                                     float const *b) {
+__global__ void blockSubtract_kernel(uint32_t n, float *A, float *x, float *b) {
   blockSubtract<blocksize>(n, A, x, b);
 }
 
@@ -260,9 +258,35 @@ __device__ void trsm(const uint32_t n, float const *A, float *X,
   }
 }
 
-__global__ void trsm_kernel(uint32_t n, const float *A, float *X,
-                            const float *B) {
+__global__ void trsm_kernel(uint32_t n, float *A, float *X, float *B) {
   trsm(n, A, X, B);
+}
+
+void trsmGraphLaunch(uint32_t n, float *A, float *X, float *B) {
+
+  CUDA_CHECK(cudaMalloc(&A_d, N * N * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&b_d, N * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&x_d, N * sizeof(float)));
+
+  CUDA_CHECK(cudaMemcpy(A_d, A, N * N * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(b_d, b, N * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemset(x_d, 0, N * sizeof(float)));
+
+  constexpr uint32_t blocksize = 32;
+  uint32_t numblocks = n / blocksize;
+
+  cudaGraph_t graph;
+  CUDA_CHECK(cudaGraphCreate(&graph, 0));
+
+  buildTriangularSolverGraph<blocksize>(graph, numblocks, n, A_d, X_d, B_d);
+
+  cudaGraphExec_t graphExec;
+  CUDA_CHECK(cudaGraphInstantiate(&graphExec, graph, NULL, NULL, 0));
+
+  CUDA_CHECK(cudaGraphLaunch(graphExec, 0));
+
+  cudaGraphExecDestroy(graphExec);
+  cudaGraphDestroy(graph);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
