@@ -262,15 +262,16 @@ __global__ void trsm_kernel(uint32_t n, float *A, float *X, float *B) {
   trsm(n, A, X, B);
 }
 
-void trsmGraphLaunch(uint32_t n, float *A, float *X, float *B) {
+void trsmGraphLaunch(uint32_t n, float *A, float *b, float *x) {
 
-  CUDA_CHECK(cudaMalloc(&A_d, N * N * sizeof(float)));
-  CUDA_CHECK(cudaMalloc(&b_d, N * sizeof(float)));
-  CUDA_CHECK(cudaMalloc(&x_d, N * sizeof(float)));
+  float *A_d, *b_d, *x_d;
+  CUDA_CHECK(cudaMalloc(&A_d, n * n * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&b_d, n * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&x_d, n * sizeof(float)));
 
-  CUDA_CHECK(cudaMemcpy(A_d, A, N * N * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(b_d, b, N * sizeof(float), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemset(x_d, 0, N * sizeof(float)));
+  CUDA_CHECK(cudaMemcpy(A_d, A, n * n * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(b_d, b, n * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemset(x_d, 0, n * sizeof(float)));
 
   constexpr uint32_t blocksize = 32;
   uint32_t numblocks = n / blocksize;
@@ -278,12 +279,14 @@ void trsmGraphLaunch(uint32_t n, float *A, float *X, float *B) {
   cudaGraph_t graph;
   CUDA_CHECK(cudaGraphCreate(&graph, 0));
 
-  buildTriangularSolverGraph<blocksize>(graph, numblocks, n, A_d, X_d, B_d);
+  buildTriangularSolverGraph<blocksize>(graph, numblocks, n, A_d, x_d, b_d);
 
   cudaGraphExec_t graphExec;
   CUDA_CHECK(cudaGraphInstantiate(&graphExec, graph, NULL, NULL, 0));
 
   CUDA_CHECK(cudaGraphLaunch(graphExec, 0));
+
+  CUDA_CHECK(cudaMemcpy(x, x_d, n * sizeof(float), cudaMemcpyDeviceToHost));
 
   cudaGraphExecDestroy(graphExec);
   cudaGraphDestroy(graph);
@@ -339,7 +342,8 @@ void test_forward_substitution(uint32_t N) {
   CUDA_CHECK(cudaMemset(x_d, 0, N * sizeof(float)));
 
   // Launch with one warp (since function assumes warp-level sum)
-  forward_substitution_kernel<<<1, 32>>>(N, A_d, x_d, b_d);
+  // forward_substitution_kernel<<<1, 32>>>(N, A_d, x_d, b_d);
+  trsmGraphLaunch(N, A, x_gpu, b);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   CUDA_CHECK(cudaMemcpy(x_gpu, x_d, N * sizeof(float), cudaMemcpyDeviceToHost));
