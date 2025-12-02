@@ -12,7 +12,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 // GPU Naive Implementation
 
-__global__ void cholesky_gpu_naive(
+__device__ void cholesky(
     const uint32_t n, float const *in, float *out
 ) {
     // Iterate over all rows
@@ -41,6 +41,12 @@ __global__ void cholesky_gpu_naive(
             out[i * n + i] = sqrtf((in[i * n + i] - tmp));
         }
     }
+}
+
+__global__ void cholesky_gpu_naive(
+    const uint32_t n, float const *in, float *out
+) {
+    cholesky(n, in, out);
 }
 
 void launch_cholesky_gpu_naive(
