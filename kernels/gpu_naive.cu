@@ -1,37 +1,13 @@
+// TL+ {"compile_flags": ["-lcuda"]}
+// TL+ {"header_files": ["utils.cuh"]}
+// TL {"workspace_files": []}
+
+#include "utils.cuh"
 #include <cstdint>
 #include <cstdio>
 #include <cuda_runtime.h>
 #include <math.h>
 #include <stdio.h>
-
-// Macro to check CUDA errors
-#define CUDA_CHECK(err) \
-    if ((err) != cudaSuccess) { \
-        fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
-        exit(EXIT_FAILURE); \
-    }
-
-// Helpers
-template <typename T>
-__device__ T warp_prefix_sum(T val) {
-    // Computes parallel prefix on 32 elements using Hillis Steele Scan w/ warp shuffle
-    const uint32_t thread_idx = threadIdx.x % 32;
-    uint32_t idx = 1;
-    #pragma unroll
-    for (uint32_t step = 0; step < 5; ++step) { // log2(32) = 5
-        // Load prefix from register
-        T tmp = __shfl_up_sync(0xffffffff, val, idx);
-        tmp = (thread_idx >= idx) ? tmp : 0; // Mask out
-
-        // Update prefix in register
-        val += tmp;
-
-        // Multiply idx by 2
-        idx <<= 1;
-    }
-
-    return val;
-}
 
 ////////////////////////////////////////////////////////////////////////////////
 // GPU Naive Implementation
@@ -49,7 +25,7 @@ __global__ void cholesky_gpu_naive(
                 tmp += out[i * n + k] * out[j * n + k];
             }
             // Combine the sum across the warp
-            tmp = warp_prefix_sum<float>(tmp);
+            tmp = utils::warp_prefix_sum<float>(tmp);
             // Last thread handles writing it back
             if (threadIdx.x == 31) {
                 out[i * n + j] = (in[i * n + j] - tmp) / out[j * n + j];
@@ -60,7 +36,7 @@ __global__ void cholesky_gpu_naive(
         for (uint32_t k = threadIdx.x; k < i; k += 32) {
             tmp += out[i * n + k] * out[i * n + k];
         }
-        tmp = warp_prefix_sum<float>(tmp);
+        tmp = utils::warp_prefix_sum<float>(tmp);
         if (threadIdx.x == 31) {
             out[i * n + i] = sqrtf((in[i * n + i] - tmp));
         }

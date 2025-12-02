@@ -9,14 +9,6 @@
 #include <math.h>
 #include <stdio.h>
 
-// Macro to check CUDA errors
-#define CUDA_CHECK(err)                                                        \
-  if ((err) != cudaSuccess) {                                                  \
-    fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__,           \
-            cudaGetErrorString(err));                                          \
-    exit(EXIT_FAILURE);                                                        \
-  }
-
 ////////////////////////////////////////////////////////////////////////////////
 // Substitution methods
 
