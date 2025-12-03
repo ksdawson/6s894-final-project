@@ -42,10 +42,13 @@ __global__ void cholesky_trsm_combined(const uint32_t N, const uint32_t block_n,
     
         trsm_naive::trsm_transpose_kernel_XY(
             N, block_n, out, out, in, offset_i_minus_1, offset_i_minus_1, offset_i, offset_i_minus_1, offset_i_minus_1, offset_i);
+        __syncthreads();
 
         gemm::gemm_naive_XY(N, block_n, in, out, shared_mem, offset_i, offset_i, offset_i, offset_i_minus_1);
+        __syncthreads();
 
         cholesky_naive::cholesky_XY(block_n, N, block_n, shared_mem, out, offset_i, offset_i);
+        __syncthreads();
         // if (threadIdx.x == 0) {
         //     for (uint32_t i = 0; i < N*block_n; ++i) {
         //         for (uint32_t j = 0; j < N*block_n; ++j) {

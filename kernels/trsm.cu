@@ -15,14 +15,6 @@
       utils::cuda_check((x), __FILE__, __LINE__); \
   } while (0)
 
-namespace trsm {
-
-size_t get_workspace_size(int32_t size) {
-  // Allocate enough space to hold size_i * size_j * size_k floats
-  // Return size in bytes
-  // Use size_t to avoid overflow on intermediate multiplication by casting early
-  return 0;
-}
 ////////////////////////////////////////////////////////////////////////////////
 // Substitution methods
 
@@ -312,5 +304,4 @@ int main() {
   test_trsm(32);
   //test_trsm(16);
   return 0;
-}
 }
