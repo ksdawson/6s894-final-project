@@ -123,10 +123,22 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
 ) {
     // Only 1 SM participates
 
+    // Setup smem
+    extern __shared__ float smem[];
+    float *smem2 = smem + m * m;
+
     // Chol (only first warp participates)
     const float *Ajj = block_cholesky_space::get_block(A, j, j, n, m);
-    float *Ljj = block_cholesky_space::get_block(L, j, j, n, m);
-    cholesky_small::block_cholesky(Ajj, Ljj, n, n, m);
+    float *Ljj = smem2;
+    cholesky_small::block_cholesky(Ajj, Ljj, n, m, m);
+
+    // Write back Ljj
+    Ljj = block_cholesky_space::get_block(L, j, j, n, m);
+    for (uint32_t idx = threadIdx.x; idx < m * m; idx += blockDim.x) {
+        const uint32_t ti = idx / m;
+        const uint32_t tj = idx % m;
+        Ljj[ti * n + tj] = smem2[idx];
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -141,6 +153,11 @@ void launch_block_cholesky(
     // Setup smem
     constexpr int smem_size_bytes = m * m * 2 * sizeof(float); // need to store 2 blocks in smem
     cudaFuncSetAttribute(
+        chol_kernel<4, 4>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        smem_size_bytes
+    );
+    cudaFuncSetAttribute(
         block_kernel<4, 4>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
         smem_size_bytes
@@ -149,7 +166,7 @@ void launch_block_cholesky(
     // Iterate over block cols launching a kernel for each step
     for (uint32_t j = 0; j < n / m; ++j) {
         // Step 1: Chol diagonal block
-        chol_kernel<4, 4><<<1, 32>>>(in, out, n, m, j);
+        chol_kernel<4, 4><<<1, 32, smem_size_bytes>>>(in, out, n, m, j);
 
         // Step 2: Trsm then update
         block_kernel<4, 4><<<48, 8*32, smem_size_bytes>>>(const_cast<float*>(in), out, n, m, j);
