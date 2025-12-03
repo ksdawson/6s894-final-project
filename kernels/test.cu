@@ -1,96 +1,85 @@
 // TL+ {"compile_flags": ["-lcuda"]}
-// TL+ {"header_files": ["utils.cuh"]}
+// TL+ {"header_files": ["gpu_naive.cuh", "cpu.cuh", "utils.cuh"]}
 // TL {"workspace_files": []}
 
-#include "utils.cuh"
 #include <cstdint>
 #include <cstdio>
 #include <cuda_runtime.h>
 #include <math.h>
 #include <stdio.h>
+#include "cpu.cuh"
+#include "gpu_naive.cuh"
+#include "utils.cuh"
 
 ////////////////////////////////////////////////////////////////////////////////
-// GPU Naive Implementation
+// Cholesky test harness
 
-__device__ void cholesky(
-    const uint32_t n, float const *in, float *out
-) {
-    // Iterate over all rows
+void test_case_3x3_cpu() {
+    // Test case
+    const uint32_t n = 3;
+
+    // Allocate host memory
+    float *in_cpu = static_cast<float*>(malloc(n * n * sizeof(float)));
+    float *out_cpu = static_cast<float*>(malloc(n * n * sizeof(float)));
+
+    // Fill in test data on host
+    in_cpu[0] = 4.0f;
+    in_cpu[1] = 12.0f;
+    in_cpu[2] = -16.0f;
+    in_cpu[3] = 12.0f;
+    in_cpu[4] = 37.0f;
+    in_cpu[5] = -43.0f;
+    in_cpu[6] = -16.0f;
+    in_cpu[7] = -43.0f;
+    in_cpu[8] = 98.0f;
+
+    // Run Cholesky decomposition
+    cholesky_cpu_naive(n, in_cpu, out_cpu);
+
+    // Verify output
+    bool test_failed = false;
+    // Verify upper triangle
     for (uint32_t i = 0; i < n; ++i) {
-        // Iterate over lower triangle off-diagonal cols
-        for (uint32_t j = 0; j < i; ++j) {
-            // Each thread computes a piece of the sum
-            float tmp = 0.0f;
-            for (uint32_t k = threadIdx.x; k < j; k += 32) {
-                tmp += out[i * n + k] * out[j * n + k];
+        for (uint32_t j = i + 1; j < n; ++j) {
+            if (out_cpu[i * n + j] != 0.0f) {
+                printf("Test 3x3 failed: upper triangle at (%u, %u) should be 0\n", i, j);
+                test_failed = true;
+                break;
             }
-            // Combine the sum across the warp
-            tmp = utils::warp_prefix_sum<float>(tmp);
-            // Last thread handles writing it back
-            if (threadIdx.x == 31) {
-                out[i * n + j] = (in[i * n + j] - tmp) / out[j * n + j];
-            }
-        }
-        // Handle diagonal col
-        float tmp = 0.0f;
-        for (uint32_t k = threadIdx.x; k < i; k += 32) {
-            tmp += out[i * n + k] * out[i * n + k];
-        }
-        tmp = utils::warp_prefix_sum<float>(tmp);
-        if (threadIdx.x == 31) {
-            out[i * n + i] = sqrtf((in[i * n + i] - tmp));
         }
     }
-}
-
-__device__ void block_cholesky(float const *A, float *L,
-    const uint32_t n, const uint32_t m
-) {
-    // Iterate over all rows
-    for (uint32_t i = 0; i < m; ++i) {
-        // Iterate over lower triangle off-diagonal cols
-        for (uint32_t j = 0; j < i; ++j) {
-            // Each thread computes a piece of the sum
-            float tmp = 0.0f;
-            for (uint32_t k = threadIdx.x; k < j; k += 32) {
-                tmp += L[i * n + k] * L[j * n + k];
-            }
-            // Combine the sum across the warp
-            tmp = utils::warp_prefix_sum<float>(tmp);
-            // Last thread handles writing it back
-            if (threadIdx.x == 31) {
-                L[i * n + j] = (A[i * n + j] - tmp) / L[j * n + j];
-            }
-        }
-        // Handle diagonal col
-        float tmp = 0.0f;
-        for (uint32_t k = threadIdx.x; k < i; k += 32) {
-            tmp += L[i * n + k] * L[i * n + k];
-        }
-        tmp = utils::warp_prefix_sum<float>(tmp);
-        if (threadIdx.x == 31) {
-            L[i * n + i] = sqrtf((A[i * n + i] - tmp));
-        }
+    // Verify lower triangle
+    if (out_cpu[0] != 2.0f) {
+        printf("Test 3x3 failed: lower triangle at (0, 0) should be 2\n");
+        test_failed = true;
+    } else if (out_cpu[3] != 6.0f) {
+        printf("Test 3x3 failed: lower triangle at (1, 0) should be 6\n");
+        test_failed = true;
+    } else if (out_cpu[4] != 1.0f) {
+        printf("Test 3x3 failed: lower triangle at (1, 1) should be 1\n");
+        test_failed = true;
+    } else if (out_cpu[6] != -8.0f) {
+        printf("Test 3x3 failed: lower triangle at (2, 0) should be -8\n");
+        test_failed = true;
+    } else if (out_cpu[7] != 5.0f) {
+        printf("Test 3x3 failed: lower triangle at (2, 1) should be 5\n");
+        test_failed = true;
+    } else if (out_cpu[8] != 3.0f) {
+        printf("Test 3x3 failed: lower triangle at (2, 2) should be 3\n");
+        test_failed = true;
     }
+
+    if (!test_failed) {
+        // Test passed
+        printf("Test 3x3 passed\n");
+    }
+
+    // Clean up memory
+    free(in_cpu);
+    free(out_cpu);
 }
 
-__global__ void cholesky_gpu_naive(
-    const uint32_t n, float const *in, float *out
-) {
-    cholesky(n, in, out);
-}
-
-void launch_cholesky_gpu_naive(
-    const uint32_t n, float const *in, float *out
-) {
-    // Cholesky only using 1 warp and parallelizing over the inner sum
-    cholesky_gpu_naive<<<1, 1*32>>>(n, in, out);
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// Test harness
-
-void test_case_3x3() {
+void test_case_3x3_gpu() {
     // Test case
     constexpr uint32_t n = 3;
 
@@ -186,7 +175,7 @@ void generate_spd_matrix(uint32_t N, float* A) {
 }
 
 // Test case for any size
-void test_case(uint32_t N) {
+void test_case_gpu(uint32_t N) {
     printf("Testing Cholesky %ux%u\n", N, N);
 
     float *in_cpu  = (float*)malloc(N * N * sizeof(float));
@@ -237,8 +226,14 @@ void test_case(uint32_t N) {
     CUDA_CHECK(cudaFree(out_gpu));
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// TRSM test harness
+
 int main(int argc, char **argv) {
+    printf("Testing CPU naive\n");
+    test_case_3x3_cpu();
+
     printf("Testing GPU naive\n");
-    test_case_3x3();
-    test_case(50);
+    test_case_3x3_gpu();
+    test_case_gpu(50);
 }
