@@ -408,8 +408,12 @@ int main(int argc, char **argv) {
     // test_trsm(16);
 
     printf("Testing GPU block\n");
-    test_case_gpu(64, launch_block_cholesky);
-    test_case_gpu(128, launch_block_cholesky);
+    printf("1x1 block Cholesky\n");
+    test_case_gpu(64, launch_block_cholesky); // 1x1
+    printf("2x2 block Cholesky\n");
+    test_case_gpu(128, launch_block_cholesky); // 2x2
+    printf("4x4 block Cholesky\n");
+    test_case_gpu(256, launch_block_cholesky); // 4x4
     printf("\n");
 
     return 0;
