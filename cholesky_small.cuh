@@ -63,33 +63,34 @@ __global__ void cholesky_gpu_naive(
 // Block methods
 
 __device__ void block_cholesky(float const *A, float *L,
-    const uint32_t n, const uint32_t m
+    const uint32_t A_n, const uint32_t L_n,
+    const uint32_t r
 ) {
     if (threadIdx.x < 32) { // Ensure only one warp participates
         // Iterate over all rows
-        for (uint32_t i = 0; i < m; ++i) {
+        for (uint32_t i = 0; i < r; ++i) {
             // Iterate over lower triangle off-diagonal cols
             for (uint32_t j = 0; j < i; ++j) {
                 // Each thread computes a piece of the sum
                 float tmp = 0.0f;
                 for (uint32_t k = threadIdx.x; k < j; k += 32) {
-                    tmp += L[i * n + k] * L[j * n + k];
+                    tmp += L[i * L_n + k] * L[j * L_n + k];
                 }
                 // Combine the sum across the warp
                 tmp = utils::warp_prefix_sum<float>(tmp);
                 // Last thread handles writing it back
                 if (threadIdx.x == 31) {
-                    L[i * n + j] = (A[i * m + j] - tmp) / L[j * n + j];
+                    L[i * L_n + j] = (A[i * A_n + j] - tmp) / L[j * L_n + j];
                 }
             }
             // Handle diagonal col
             float tmp = 0.0f;
             for (uint32_t k = threadIdx.x; k < i; k += 32) {
-                tmp += L[i * n + k] * L[i * n + k];
+                tmp += L[i * L_n + k] * L[i * L_n + k];
             }
             tmp = utils::warp_prefix_sum<float>(tmp);
             if (threadIdx.x == 31) {
-                L[i * n + i] = sqrtf((A[i * m + i] - tmp));
+                L[i * L_n + i] = sqrtf((A[i * A_n + i] - tmp));
             }
         }
     }
