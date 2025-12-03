@@ -90,17 +90,27 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
     // Setup smem
     extern __shared__ float smem[];
     float *smem2 = smem + m * m;
+    float *smem3 = smem2 + m * m;
 
     // Each SM gets a block
     for (uint32_t i = j + 1 + blockIdx.x; i < n / m; i += gridDim.x) {
         // Update
         block_cholesky_space::block_update<T_TH, T_TW>(A, L, n, m, i, j, smem);
 
+        // Load Ljj into smem
+        float *Ljj = block_cholesky_space::get_block(L, j, j, n, m);
+        for (uint32_t idx = threadIdx.x; idx < m * m; idx += blockDim.x) {
+            const uint32_t ti = idx / m;
+            const uint32_t tj = idx % m;
+            smem3[idx] = Ljj[ti * n + tj];
+        }
+        Ljj = smem3;
+        __syncthreads();
+
         // TRSM
         float *Lij = smem2;
-        float *Ljj = block_cholesky_space::get_block(L, j, j, n, m);
         float *Aij = smem;
-        trsm_small::block_trsm(Ljj, Lij, Aij, n, m, m, m); // A, X, B
+        trsm_small::block_trsm(Ljj, Lij, Aij, m, m, m, m); // A, X, B
 
         // Write back Lij
         Lij = block_cholesky_space::get_block(L, i, j, n, m);
@@ -149,25 +159,25 @@ void launch_block_cholesky(
     constexpr uint32_t m = 64;
 
     // Setup smem
-    constexpr int smem_size_bytes = m * m * 2 * sizeof(float); // need to store 2 blocks in smem
+    constexpr int smem_size_bytes = m * m * sizeof(float);
     cudaFuncSetAttribute(
         chol_kernel,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
-        smem_size_bytes/2
+        smem_size_bytes
     );
     cudaFuncSetAttribute(
         block_kernel<4, 4>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
-        smem_size_bytes
+        smem_size_bytes * 3 // need to store 3 blocks in smem
     );
 
     // Iterate over block cols launching a kernel for each step
     for (uint32_t j = 0; j < n / m; ++j) {
         // Step 1: Chol diagonal block
-        chol_kernel<<<1, 32, smem_size_bytes/2>>>(in, out, n, m, j);
+        chol_kernel<<<1, 32, smem_size_bytes>>>(in, out, n, m, j);
 
         // Step 2: Trsm then update
-        block_kernel<4, 4><<<48, 8*32, smem_size_bytes>>>(const_cast<float*>(in), out, n, m, j);
+        block_kernel<4, 4><<<48, 8*32, smem_size_bytes*3>>>(const_cast<float*>(in), out, n, m, j);
     }
 }
 
