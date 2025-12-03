@@ -14,10 +14,10 @@
 ////////////////////////////////////////////////////////////////////////////////
 // Device functions
 
-namespace default_chol {
+namespace alt_kernel_fusion {
 
 template <uint32_t T_TH, uint32_t T_TW>
-__device__ void block_gemm_naive(BlockUpdate input) {
+__device__ void diagonal_block_gemm_naive(BlockUpdate input) {
     auto [A, L, n, m, i, j, reg, smem] = input;
 
     // Matrix to multiply
@@ -45,7 +45,7 @@ __device__ void block_gemm_naive(BlockUpdate input) {
 }
 
 template <uint32_t T_TH, uint32_t T_TW>
-__device__ void block_update(float *A, float *L,
+__device__ void diagonal_block_update(float *A, float *L,
     const uint32_t n, const uint32_t m,
     const uint32_t i, const uint32_t j,
     float *smem
@@ -55,7 +55,7 @@ __device__ void block_update(float *A, float *L,
 
     // Compute Lij * Lij^T
     BlockUpdate input = {A, L, n, m, i, j, reg, smem};
-    block_gemm_naive<T_TH, T_TW>(input);
+    diagonal_block_gemm_naive<T_TH, T_TW>(input);
 
     // Move A to Aii
     float *Aii = get_block(A, i, i, n, m);
@@ -85,27 +85,30 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
 ) {
     // Setup smem
     extern __shared__ float smem[];
+    float *smem2 = smem + m * m;
 
     // Each SM gets a block
     for (uint32_t i = j + 1 + blockIdx.x; i < n / m; i += gridDim.x) {
-        // TRSM
-        float *Ljj = get_block(L, j, j, n, m);
-        float *Aij = get_block(A, i, j, n, m);
-        block_trsm(Ljj, smem, Aij, n, m, n, m); // A, X, B (Ljj * Lij^T = Aij^T)
+        // Update
+        kernel_fusion::block_update<T_TH, T_TW>(A, L, n, m, i, j, smem);
 
-        // Move L to Lij 
-        float *Lij = get_block(L, i, j, n, m);
+        // TRSM
+        float *Lij = smem2;
+        float *Ljj = get_block(L, j, j, n, m);
+        float *Aij = smem;
+        block_trsm(Ljj, Lij, Aij, n, m, m, m); // A, X, B
 
         // Write back Lij
+        Lij = get_block(L, i, j, n, m);
         for (uint32_t idx = threadIdx.x; idx < m * m; idx += blockDim.x) {
             const uint32_t ti = idx / m;
             const uint32_t tj = idx % m;
-            Lij[ti * n + tj] = smem[idx];
+            Lij[ti * n + tj] = smem2[idx];
         }
         __syncthreads();
 
         // Update Aii
-        block_update<T_TH, T_TW>(A, L, n, m, i, j, smem);
+        diagonal_block_update<T_TH, T_TW>(A, L, n, m, i, j, smem2);
     }
 }
 
@@ -149,4 +152,4 @@ void launch_block_cholesky(
     }
 }
 
-} // namespace default_chol
+} // namespace alt_kernel_fusion
