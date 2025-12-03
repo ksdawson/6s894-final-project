@@ -10,7 +10,14 @@
 #include <stdio.h>
 #include "utils.cuh"
 
-namespace trsm_naive {
+namespace trsm {
+
+size_t get_workspace_size(int32_t size) {
+    // Allocate enough space to hold size_i * size_j * size_k floats
+    // Return size in bytes
+    // Use size_t to avoid overflow on intermediate multiplication by casting early
+    return 0;
+}
 
 template <bool x_row, bool b_row>
 __device__ void forward_substitution(const uint32_t n, float const *A, float *x,
@@ -57,7 +64,7 @@ __global__ void forward_substitution_kernel(uint32_t n, const float *A,
 // TRSM uses forward substitution in each row. It is sequential in a row, but
 // all rows are independent.
 
-__device__ void trsm(const uint32_t n, float const *A, float *X,
+__device__ void trsm_naive(const uint32_t n, float const *A, float *X,
                         float const *B) {
     // Assumes we're solving for X in A * X^T = B, so we can use rows of X instead
     // of cols Get grid-level warp idx
@@ -74,7 +81,7 @@ __device__ void trsm(const uint32_t n, float const *A, float *X,
 
 __global__ void trsm_kernel(uint32_t n, const float *A, float *X,
                             const float *B) {
-    trsm(n, A, X, B);
+    trsm_naive(n, A, X, B);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -146,6 +153,11 @@ __device__ void trsm_kernel_XY(const uint32_t n, float const *A, float *X, float
     //     printf("B[%u] = %f\n", i, B[i]);
     //   }
     // }
+}
+
+void launch_trsm(
+    const uint32_t n, float const *A, float const *B, float *X, void *workspace) {
+    trsm_kernel<<<1, 32>>>(n, A, X, B);
 }
 
 }

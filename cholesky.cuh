@@ -19,7 +19,7 @@
 
 ////////////////////////////////////////////////////////////////////////////////
 // Cholesky Naive Implementation
-namespace cholesky_naive {
+namespace cholesky {
 
 size_t get_workspace_size(int32_t size) {
     // Allocate enough space to hold size_i * size_j * size_k floats
@@ -156,4 +156,10 @@ __device__ void cholesky_XY(
         __syncthreads();
     }
 }
+
+void launch_cholesky(
+    const uint32_t n, float const *in, float *out, void *workspace) {
+    cholesky_naive<<<1, 32>>>(n, in, out);
+}
+
 } // namespace cholesky_naive

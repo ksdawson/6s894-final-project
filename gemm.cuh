@@ -49,6 +49,7 @@ __device__ int32_t index (int32_t row_ID, int32_t col_ID, int32_t offset_col, in
     return (offset_col + row_ID) * dim + (offset_row + col_ID);
 }
 
+// can handle maximum block size of 64x64 due to shared memory size limit
 template <int32_t T_TH, int32_t T_TW>
 __device__ void block_gemm (BlockUpdate gemm_info, const uint32_t k, float *shared_mem) {
 

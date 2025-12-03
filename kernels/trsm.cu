@@ -15,6 +15,14 @@
       utils::cuda_check((x), __FILE__, __LINE__); \
   } while (0)
 
+namespace trsm {
+
+size_t get_workspace_size(int32_t size) {
+  // Allocate enough space to hold size_i * size_j * size_k floats
+  // Return size in bytes
+  // Use size_t to avoid overflow on intermediate multiplication by casting early
+  return 0;
+}
 ////////////////////////////////////////////////////////////////////////////////
 // Substitution methods
 
@@ -229,7 +237,7 @@ void test_trsm(uint32_t N) {
   // Generate random true solution
   for (uint32_t i = 0; i < N * N; ++i) {
     X_true[i] = (float)(rand() % 10 + 1);
-  }
+  } 
 
   // Compute B = X_true * L^T (since trsm solves L * X^T = B, so B = X_true *
   // L^T) Alternatively, if trsm is solving row-wise L*x = b, then B = X_true *
@@ -304,4 +312,5 @@ int main() {
   test_trsm(32);
   //test_trsm(16);
   return 0;
+}
 }
