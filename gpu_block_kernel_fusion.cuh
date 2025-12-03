@@ -1,5 +1,5 @@
 // TL+ {"compile_flags": ["-lcuda"]}
-// TL+ {"header_files": ["trsm.cuh", "gpu_naive.cuh"]}
+// TL+ {"header_files": ["trsm_small.cuh", "cholesky_small.cuh"]}
 // TL {"workspace_files": []}
 
 #pragma once
@@ -7,11 +7,17 @@
 #include <cstdio>
 #include <cuda_runtime.h>
 #include <math.h>
-#include "trsm.cuh"
-#include "gpu_naive.cuh"
+#include "trsm_small.cuh"
+#include "cholesky_small.cuh"
 
 ////////////////////////////////////////////////////////////////////////////////
 // Helper functions
+
+namespace block_cholesky_space {
+
+size_t get_workspace_size(int32_t size) {
+    return 0;
+}
 
 __device__ float* get_block(float *A, const uint32_t i, const uint32_t j, const uint32_t n, const uint32_t m) { return A + i * m * n + j * m; }
 __device__ const float* get_block(const float *A, const uint32_t i, const uint32_t j, const uint32_t n, const uint32_t m) { return A + i * m * n + j * m; }
@@ -113,7 +119,7 @@ __global__ void block_kernel(const float *A, float *L, // input matrix, Chol mat
         float *Lij = get_block(L, i, j, n, m);
         float *Ljj = get_block(L, j, j, n, m);
         float *Aij = smem;
-        block_trsm(Ljj, Lij, Aij, n, m); // A, X, B
+        trsm_small::block_trsm(Ljj, Lij, Aij, n, m); // A, X, B
     }
 }
 
@@ -133,14 +139,14 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
     // Chol (only first warp participates)
     float *Ajj = smem;
     float *Ljj = get_block(L, j, j, n, m);
-    block_cholesky(Ajj, Ljj, n, m);
+    cholesky_small::block_cholesky(Ajj, Ljj, n, m);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // Host functions
 
 void launch_block_cholesky(
-    const uint32_t n, float const *in, float *out
+    const uint32_t n, float const *in, float *out, void *workspace
 ) {
     // Divide the grid into blocks
     constexpr uint32_t m = 64;
@@ -166,4 +172,6 @@ void launch_block_cholesky(
         // Step 2: Trsm(update) all other blocks
         block_kernel<4, 4><<<48, 8*32, smem_size_bytes>>>(in, out, n, m, j);
     }
+}
+
 }

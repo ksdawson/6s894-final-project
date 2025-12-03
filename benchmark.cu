@@ -1,5 +1,5 @@
 // TL+ {"compile_flags": ["-lcuda"]}
-// TL+ {"header_files": ["utils.cuh", "cholesky.cuh", "trsm.cuh"]}
+// TL+ {"header_files": ["utils.cuh", "cholesky.cuh", "trsm.cuh", "gpu_block_kernel_fusion.cuh", "cholesky_small.cuh", "trsm_small.cuh"]}
 // TL+ {"workspace_files": []}
 #include <chrono>
 #include <cstdint>
@@ -13,13 +13,16 @@
 #include <utility>
 #include <vector>
 #include "utils.cuh"
-#include "cholesky.cuh"
+#include "cholesky_small.cuh"
+#include "trsm_small.cuh"
+//#include "cholesky.cuh"
 #include "trsm.cuh"
+#include "gpu_block_kernel_fusion.cuh"
 
-#define CUDA_CHECK(x) \
-  do { \
-      utils::cuda_check((x), __FILE__, __LINE__); \
-  } while (0)
+// #define CUDA_CHECK(x) \
+//   do { \
+//       utils::cuda_check((x), __FILE__, __LINE__); \
+//   } while (0)
 
 // std::vector<float> read_data(std::string const &path, int32_t size) {
 //     //printf("Reading data from %s\n", path.c_str());
@@ -37,6 +40,8 @@
 enum class Phase {
     CHOLESKY,
     TRSM,
+    CHOLESKY_SMALL,
+    TRSM_SMALL,
 };
 
 struct BenchmarkResults {
@@ -134,15 +139,15 @@ TestData generate_test_data(
     Phase phase) {
     auto data = TestData{};
     for (auto const &config : configs) {
-        if (phase == Phase::CHOLESKY) {
+        if (phase == Phase::CHOLESKY || phase == Phase::CHOLESKY_SMALL) {
             auto size = config.size;
             data.c[{size}] = generate_lower_triangular_matrix(size);
             data.a[{size}] = chol_generate(data.c[{size}], size);
-        } else if (phase == Phase::TRSM) {
+        } else if (phase == Phase::TRSM || phase == Phase::TRSM_SMALL) {
             auto size = config.size;
             data.a[{size}] = generate_lower_triangular_matrix(size);
-            data.b[{size}] = generate_random_matrix(size);
-            data.c[{size}] = trsm_generate(data.a[{size}], data.b[{size}], size);
+            data.c[{size}] = generate_random_matrix(size);
+            data.b[{size}] = trsm_generate(data.a[{size}], data.c[{size}], size);
         }
     }
     return data;
@@ -218,14 +223,13 @@ void run_config(
 
     printf("  %6d", size);
 
-    if (phase == Phase::CHOLESKY) {
-        Impl::run(size, a_gpu, b_gpu, c_gpu, workspace_gpu);
-    } else if (phase == Phase::TRSM) {
+    if (phase == Phase::CHOLESKY || phase == Phase::CHOLESKY_SMALL) {
+        
+    } else if (phase == Phase::TRSM || phase == Phase::TRSM_SMALL) {
         auto const &b = data.b.at({size});
         CUDA_CHECK(cudaMemcpy(b_gpu, b.data(), size * size * sizeof(float), cudaMemcpyHostToDevice));
-
-        Impl::run(size, a_gpu, b_gpu, c_gpu, workspace_gpu);
     }
+    Impl::run(size, a_gpu, c_gpu, b_gpu, workspace_gpu);
 
     std::vector<float> c_out_host(size * size);
     CUDA_CHECK(cudaMemcpy(
@@ -267,7 +271,7 @@ void run_config(
                 CUDA_CHECK(cudaMemset(flush_gpu, 1, 1024*1024*64));
             },
             [&]() {
-                Impl::run(size, a_gpu, b_gpu, c_gpu, workspace_gpu);
+                Impl::run(size, a_gpu, c_gpu, b_gpu, workspace_gpu);
             });
 
         results.elapsed_ms[{size}] = elapsed_ms;
@@ -317,16 +321,16 @@ struct Cholesky {
     constexpr static char const *name = "cholesky";
 
     static size_t get_workspace_size(int32_t size) {
-        return cholesky::get_workspace_size(size);
+        return block_cholesky_space::get_workspace_size(size);
     }
 
     static void
     run(int32_t size,
         float const *a,
-        float const *b,
         float *c,
+        float const *b,
         void *workspace) {
-        cholesky::launch_cholesky(size, a, c, workspace);
+        block_cholesky_space::launch_block_cholesky(size, a, c, workspace);
     }
 };
 
@@ -334,18 +338,53 @@ struct Trsm {
     constexpr static char const *name = "trsm";
 
     static size_t get_workspace_size(int32_t size) {
-        return trsm::get_workspace_size(size);
+        return trsm_space::get_workspace_size(size);
     }
 
     static void
     run(int32_t size,
         float const *a,
-        float const *b,
         float *c,
+        float const *b,
         void *workspace) {
-        trsm::launch_trsm(size, a, b, c, workspace);
+        trsm_space::launch_trsm(size, a, c, b, workspace);
     }
 };
+
+struct CholeskySmall {
+    constexpr static char const *name = "cholesky_small";
+
+    static size_t get_workspace_size(int32_t size) {
+        return cholesky_small::get_workspace_size(size);
+    }
+
+    static void
+    run(int32_t size,
+        float const *a,
+        float *c,
+        float const *b,
+        void *workspace) {
+        cholesky_small::launch_cholesky(size, a, c, workspace);
+    }
+};
+
+struct TrsmSmall {
+    constexpr static char const *name = "trsm_small";
+    
+    static size_t get_workspace_size(int32_t size) {
+        return trsm_small::get_workspace_size(size);
+    }
+
+    static void
+    run(int32_t size,
+        float const *a,
+        float *c,
+        float const *b,
+        void *workspace) {
+        trsm_small::launch_trsm(size, a, c, b, workspace);
+    }
+};
+
 
 // can add more structs here for other implementations of Cholesky decompositions -- XY
 
@@ -356,6 +395,10 @@ std::vector<BenchmarkResults> run_all_impls(
     auto results = std::vector<BenchmarkResults>{};
     if (phase == Phase::CHOLESKY) {
         results.push_back(run_all_configs<Cholesky>(phase, data, configs));
+    } else if (phase == Phase::CHOLESKY_SMALL) {
+        results.push_back(run_all_configs<CholeskySmall>(phase, data, configs));
+    } else if (phase == Phase::TRSM_SMALL) {
+        results.push_back(run_all_configs<TrsmSmall>(phase, data, configs));
     } else if (phase == Phase::TRSM) {
         results.push_back(run_all_configs<Trsm>(phase, data, configs));
     }
@@ -400,16 +443,22 @@ int main(int argc, char **argv) {
 
     std::string test_data_dir = ".";
     auto configs = std::vector<BenchmarkConfig>{
-        {32},
+        {64},
+        {128},
+        {512},
+        {1024}
         // {128},
         // {256},
         // {512},
         // {1024},
         // {2048},
     };
-    auto data = generate_test_data(configs, Phase::CHOLESKY);
-    //auto data = read_test_data(test_data_dir, configs);
-    run_all_impls(Phase::CHOLESKY, data, configs);
+    // auto data_cholesky = generate_test_data(configs, Phase::CHOLESKY);
+    // run_all_impls(Phase::CHOLESKY, data_cholesky, configs);
+    // run_all_impls(Phase::CHOLESKY_SMALL, data_cholesky, configs);
+
+    auto data_trsm = generate_test_data(configs, Phase::TRSM);
+    run_all_impls(Phase::TRSM_SMALL, data_trsm, configs);
     //auto results = run_all_impls(Phase::BENCHMARK, data, configs);
 
     //can compute speedups later if needed -- XY

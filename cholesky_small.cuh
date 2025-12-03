@@ -12,6 +12,13 @@
 
 ////////////////////////////////////////////////////////////////////////////////
 // GPU Naive Implementation
+namespace cholesky_small {
+
+size_t get_workspace_size(int32_t size) {
+    return 0;
+}
+
+
 
 __device__ void cholesky(
     const uint32_t n, float const *in, float *out
@@ -50,12 +57,7 @@ __global__ void cholesky_gpu_naive(
     cholesky(n, in, out);
 }
 
-void launch_cholesky_gpu_naive(
-    const uint32_t n, float const *in, float *out
-) {
-    // Cholesky only using 1 warp and parallelizing over the inner sum
-    cholesky_gpu_naive<<<1, 1*32>>>(n, in, out);
-}
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // Block methods
@@ -91,4 +93,13 @@ __device__ void block_cholesky(float const *A, float *L,
             }
         }
     }
+}
+
+void launch_cholesky(
+    const uint32_t n, float const *in, float *out, void *workspace
+) {
+    // Cholesky only using 1 warp and parallelizing over the inner sum
+    cholesky_gpu_naive<<<1, 1*32>>>(n, in, out);
+}
+
 }

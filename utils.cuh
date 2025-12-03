@@ -6,7 +6,6 @@
 #include <stdio.h>
 
 namespace utils {
-<<<<<<< HEAD:kernels/utils.cuh
 
 // Macro to check CUDA errors
 #define CUDA_CHECK(err) \
@@ -15,9 +14,6 @@ namespace utils {
       exit(EXIT_FAILURE); \
   }
 
-=======
-  
->>>>>>> test_benchmark:utils.cuh
 template <typename T> __device__ T warp_prefix_sum(T val) {
   // Computes parallel prefix on 32 elements using Hillis Steele Scan w/ warp
   // shuffle
@@ -38,14 +34,4 @@ template <typename T> __device__ T warp_prefix_sum(T val) {
 
   return val;
 }
-
-<<<<<<< HEAD:kernels/utils.cuh
-=======
-void cuda_check(cudaError_t code, const char *file, int line) {
-  if (code != cudaSuccess) {
-    fprintf(stderr, "CUDA error at %s:%d: %s\n", file, line, cudaGetErrorString(code));
-    exit(1);
-  }
-}
->>>>>>> test_benchmark:utils.cuh
 } // namespace utils

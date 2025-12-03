@@ -12,6 +12,11 @@
 
 ////////////////////////////////////////////////////////////////////////////////
 // Substitution methods
+namespace trsm_small {
+
+size_t get_workspace_size(int32_t size) {
+    return 0;
+}
 
 template <bool x_row, bool b_row>
 __device__ void forward_substitution(const uint32_t n, float const *A, float *x,
@@ -80,6 +85,80 @@ __global__ void trsm_kernel(uint32_t n, const float *A, float *X,
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+// Xiaomian's Kernels
+// TRSM solves A * X^T = B, so we need to transpose the kernel
+// N: number of blocks in triblock diagonal
+// block_n: dimension of each block in triblock diagonal
+// A_col_offset, A_row_offset: offset for block of interest in A in the global memory
+// X_col_offset, X_row_offset: offset for block of interest in X in the global memory
+// B_col_offset, B_row_offset: offset for block of interest in B in the global memory
+__device__ void trsm_transpose_kernel_XY(const uint32_t N, const uint32_t block_n, float const *A, float *X, float const *B,
+  uint32_t A_col_offset, uint32_t A_row_offset, uint32_t X_col_offset, uint32_t X_row_offset, uint32_t B_col_offset, uint32_t B_row_offset) {
+  
+  const uint32_t dim = N * block_n;
+  // if (threadIdx.x == 0) {
+  //     for (uint32_t i = 0; i < block_n; ++i) {
+  //         for (uint32_t j = 0; j < block_n; ++j) {
+  //             printf("B[%u, %u] = %f\n", i, j, B[(B_col_offset + i) * dim + (B_row_offset + j)]);
+  //         }
+  //     }
+  //     for (uint32_t i = 0; i < block_n; ++i) {
+  //         for (uint32_t j = 0; j < block_n; ++j) {
+  //             printf("A[%u, %u] = %f\n", i, j, A[(A_col_offset + i) * dim + (A_row_offset + j)]);
+  //         }
+  //     }
+  // }
+  
+  int32_t col_ID = threadIdx.x;
+  for (uint32_t i = 0; i < block_n; ++i) {
+
+      float sum = 0.0f;
+      //B[(B_col_offset + i) * dim + (B_row_offset + col_ID)];
+
+      for (uint32_t k = 0; k < i; ++k) {
+          sum += A[(A_col_offset + i) * dim + (A_row_offset + k)] * X[(X_col_offset + col_ID) * dim + (X_row_offset + k)];
+      }
+
+      sum = (B[(B_col_offset + i) * dim + (B_row_offset + col_ID)] - sum) / A[(A_col_offset + i) * dim + (A_row_offset + i)];
+      if (col_ID < block_n) {
+          X[(X_col_offset + col_ID) * dim + (X_row_offset + i)] = sum;
+      }
+      __syncthreads();
+  }
+}
+
+// TRSM solves A * X = B 
+template <const uint32_t col_offset, const uint32_t row_offset>
+__device__ void trsm_kernel_XY(const uint32_t n, float const *A, float *X, float const *B) {
+
+  int32_t col_ID = threadIdx.x;
+  for (uint32_t i = 0; i < n; ++i) {
+
+      float sum = B[(col_offset + i) * n + (row_offset + col_ID)];
+
+      for (uint32_t k = 0; k < i; ++k) {
+          sum -= A[(col_offset + i)*n+row_offset+k] * X[(col_offset + k)*n + (row_offset + col_ID)];
+      }
+      sum /= A[(col_offset + i)*n+row_offset+i];
+      if (col_ID < n) {
+          X[(col_offset + i)*n + (row_offset + col_ID)] = sum;
+      }
+      __syncthreads();
+  }
+
+  // if (threadIdx.x == 31) {
+  //   for (uint32_t i = 0; i < n*n; ++i) {
+  //     printf("A[%u] = %f\n", i, A[i]);
+  //   }
+  //   for (uint32_t i = 0; i < n*n; ++i) {
+  //     printf("B[%u] = %f\n", i, B[i]);
+  //   }
+  // }
+}
+
+
+
+////////////////////////////////////////////////////////////////////////////////
 // Block methods
 
 template <bool x_row, bool b_row>
@@ -128,4 +207,10 @@ __device__ void block_trsm(float const *A, float *X, float const *B,
 
   // Wait for everything to be done
   __syncthreads();
+}
+
+void launch_trsm(
+  const uint32_t n, float const *A, float *X, float const *B, void *workspace) {
+  trsm_kernel<<<1, 32>>>(n, A, X, B);
+}
 }

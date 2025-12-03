@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include "utils.cuh"
 
-namespace trsm {
+namespace trsm_space {
 
 size_t get_workspace_size(int32_t size) {
     // Allocate enough space to hold size_i * size_j * size_k floats
@@ -156,7 +156,7 @@ __device__ void trsm_kernel_XY(const uint32_t n, float const *A, float *X, float
 }
 
 void launch_trsm(
-    const uint32_t n, float const *A, float const *B, float *X, void *workspace) {
+    const uint32_t n, float const *A, float *X, float const *B, void *workspace) {
     trsm_kernel<<<1, 32>>>(n, A, X, B);
 }
 
