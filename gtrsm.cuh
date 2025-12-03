@@ -114,18 +114,18 @@ __forceinline__ __device__ void blockSubtract(uint32_t n, float const *A,
   }
 }
 template <uint32_t blocksize>
-__global__ void blockSolve_kernel(uint32_t n, float *A, float *x, float *b) {
+__global__ void blockSolve_kernel(uint32_t n, const float *A, float *x, float *b) {
   blockSolve<blocksize>(n, A, x, b);
 }
 
 template <uint32_t blocksize>
-__global__ void blockSubtract_kernel(uint32_t n, float *A, float *x, float *b) {
+__global__ void blockSubtract_kernel(uint32_t n, const float *A, float *x, float *b) {
   blockSubtract<blocksize>(n, A, x, b);
 }
 
 template <uint32_t blocksize>
 void buildTriangularSolverGraph(cudaGraph_t &graph, int num_blocks,
-                                int n_stride, int d_dim, float *d_A, float *d_x,
+                                int n_stride, int d_dim, const float *d_A, float *d_x,
                                 float *d_b) {
 
   std::vector<std::vector<cudaGraphNode_t>> solve_nodes(d_dim);
@@ -147,7 +147,7 @@ void buildTriangularSolverGraph(cudaGraph_t &graph, int num_blocks,
 
   for (int d = 0; d < d_dim; ++d) {
     for (int col = 0; col < num_blocks; ++col) {
-      float *block_A = d_A + (col * blocksize * n_stride) + (col * blocksize);
+      const float *block_A = d_A + (col * blocksize * n_stride) + (col * blocksize);
       float *block_x = d_x + d * n_stride + (col * blocksize);
       float *block_b = d_b + d * n_stride + (col * blocksize);
 
@@ -170,7 +170,7 @@ void buildTriangularSolverGraph(cudaGraph_t &graph, int num_blocks,
 
       for (int row = col + 1; row < num_blocks; ++row) {
 
-        float *sub_A = d_A + (row * blocksize * n_stride) + (col * blocksize);
+        const float *sub_A = d_A + (row * blocksize * n_stride) + (col * blocksize);
         float *sub_x = d_x + d * n_stride + (col * blocksize);
         float *sub_b = d_b + d * n_stride + (row * blocksize);
 
@@ -192,13 +192,13 @@ void buildTriangularSolverGraph(cudaGraph_t &graph, int num_blocks,
                                &sub_params);
 
         cudaGraphAddDependencies(graph, &solve_nodes[d][col],
-                                 &subtract_nodes[d][row - 1][col], NULL, 1);
+                                 &subtract_nodes[d][row - 1][col], 1);
       }
 
       if (col > 0) {
         for (int row = 0; row < col; ++row) {
           cudaGraphAddDependencies(graph, &subtract_nodes[d][col - 1][row],
-                                   &solve_nodes[d][col], NULL, 1);
+                                   &solve_nodes[d][col], 1);
         }
       }
     }
@@ -246,7 +246,7 @@ void trsmGraphLaunch(uint32_t n, float *A_d, float *b_d, float *x_d,
   printf("Custom Graph TRSM Time: %.3f ms\n", milliseconds);
 }
 
-void launch_trsm(uint32_t n, float *A, float *x, float *b, void *workspace) {
+void launch_trsm(uint32_t n, const float *A, float *x, float *b, void *workspace) {
   constexpr uint32_t blocksize = 32;
   uint32_t numblocks = n / blocksize;
 

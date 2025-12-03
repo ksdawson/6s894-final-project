@@ -51,14 +51,14 @@ __device__ void forward_substitution(const uint32_t n, float const *A, float *x,
   }
 }
 
-__global__ void forward_substitution_kernel(uint32_t n, const float *A, float *x, const float *b) {
+__global__ void forward_substitution_kernel(uint32_t n, const float *A, float *x, float *b) {
   forward_substitution<true, true>(n, A, x, b);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // TRSM
 
-__device__ void trsm(const uint32_t n, float const *A, float *X, float const *B) {
+__device__ void trsm(const uint32_t n, float const *A, float *X, float *B) {
   // Assumes we're solving for X in A * X^T = B, so we can use rows of X instead of cols
   
   // Get grid-level warp idx
@@ -74,7 +74,7 @@ __device__ void trsm(const uint32_t n, float const *A, float *X, float const *B)
 }
 
 __global__ void trsm_kernel(uint32_t n, const float *A, float *X,
-                            const float *B) {
+                            float *B) {
   trsm(n, A, X, B);
 }
 
@@ -134,7 +134,7 @@ __device__ void block_trsm(float const *A, float *X, float const *B,
 ////////////////////////////////////////////////////////////////////////////////
 // Host functions
 
-void launch_trsm(const uint32_t n, float const *A, float *X, float const *B, void *workspace) {
+void launch_trsm(const uint32_t n, float const *A, float *X, float *B, void *workspace) {
   trsm_kernel<<<48, 32*32>>>(n, A, X, B);
 }
 
@@ -183,7 +183,7 @@ __device__ void trsm_transpose_kernel_XY(const uint32_t N, const uint32_t block_
 
 // TRSM solves A * X = B 
 template <const uint32_t col_offset, const uint32_t row_offset>
-__device__ void trsm_kernel_XY(const uint32_t n, float const *A, float *X, float const *B) {
+__device__ void trsm_kernel_XY(const uint32_t n, const float *A, float *X, float *B) {
 
   int32_t col_ID = threadIdx.x;
   for (uint32_t i = 0; i < n; ++i) {
