@@ -176,7 +176,9 @@ void generate_spd_matrix(uint32_t N, float* A) {
 }
 
 // Test case for any size
-void test_case_gpu(uint32_t N) {
+void test_case_gpu(uint32_t N,
+    void (*chol)(const uint32_t n, float const *in, float *out)
+) {
     printf("Testing Cholesky %ux%u\n", N, N);
 
     float *in_cpu  = (float*)malloc(N * N * sizeof(float));
@@ -193,7 +195,7 @@ void test_case_gpu(uint32_t N) {
     CUDA_CHECK(cudaMemcpy(in_gpu, in_cpu, N * N * sizeof(float), cudaMemcpyHostToDevice));
 
     // Run Cholesky
-    launch_cholesky_gpu_naive(N, in_gpu, out_gpu);
+    chol(N, in_gpu, out_gpu);
 
     // Copy result back to host
     CUDA_CHECK(cudaMemcpy(out_cpu, out_gpu, N * N * sizeof(float), cudaMemcpyDeviceToHost));
@@ -388,7 +390,7 @@ int main(int argc, char **argv) {
 
     printf("Testing GPU naive\n");
     test_case_3x3_gpu();
-    test_case_gpu(50);
+    test_case_gpu(50, launch_cholesky_gpu_naive);
     printf("\n");
 
     printf("Testing TRSM naive\n");

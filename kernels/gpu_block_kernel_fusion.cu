@@ -24,8 +24,27 @@ struct BlockUpdate {
 };
 
 template <uint32_t T_TH, uint32_t T_TW>
-__device__ void block_gemm(BlockUpdate input, const uint32_t k) {
+__device__ void block_gemm_naive(BlockUpdate input, const uint32_t k) {
+    auto [A, L, n, m, i, j, reg, smem] = input;
 
+    // Matrices to multiply
+    float *Lik = L + i * m * n + k * m;
+    float *Ljk = L + j * m * n + k * m;
+
+    // Move to subtile
+    const uint32_t tile_i = threadIdx.x / (m / T_TW);
+    const uint32_t tile_j = threadIdx.x % (m / T_TW);
+    float *Lik_subtile = Lik + tile_i * T_TH * n + tile_j * T_TW;
+    float *Ljk_subtile = Ljk + tile_i * T_TH * n + tile_j * T_TW;
+
+    // Each thread handles a tile
+    for (uint32_t ti = 0; ti < T_TH; ++ti) {
+        for (uint32_t tj = 0; tj < T_TW; ++tj) {
+            for (uint32_t tk = 0; tk < m; ++tk) {
+                reg[ti * T_TW + tj] += Lik_subtile[ti * n + tk] * Ljk_subtile[tj * n + tk];
+            }
+        }
+    }
 }
 
 template <uint32_t T_TH, uint32_t T_TW>
@@ -40,7 +59,7 @@ __device__ void block_update(const float *A, float *L,
     // Sum Lik * Ljk^T
     BlockUpdate input = {A, L, n, m, i, j, reg, smem};
     for (uint32_t k = 0; k < j - 1; ++k) {
-        block_gemm<T_TH, T_TW>(input, k);
+        block_gemm_naive<T_TH, T_TW>(input, k);
     }
 
     // Move A to Aij 
