@@ -2,6 +2,7 @@
 // TL+ {"header_files": ["trsm.cuh", "gpu_naive.cuh"]}
 // TL {"workspace_files": []}
 
+#pragma once
 #include <cstdint>
 #include <cstdio>
 #include <cuda_runtime.h>
@@ -45,6 +46,9 @@ __device__ void block_gemm_naive(BlockUpdate input, const uint32_t k) {
             }
         }
     }
+
+    // Make sure every thread is done
+    __syncthreads();
 }
 
 template <uint32_t T_TH, uint32_t T_TW>
@@ -58,7 +62,7 @@ __device__ void block_update(const float *A, float *L,
 
     // Sum Lik * Ljk^T
     BlockUpdate input = {A, L, n, m, i, j, reg, smem};
-    for (uint32_t k = 0; k < j - 1; ++k) {
+    for (uint32_t k = 0; k < j; ++k) {
         block_gemm_naive<T_TH, T_TW>(input, k);
     }
 
@@ -69,20 +73,20 @@ __device__ void block_update(const float *A, float *L,
     const uint32_t tile_i = threadIdx.x / (m / T_TW);
     const uint32_t tile_j = threadIdx.x % (m / T_TW);
     const float *Aij_subtile = Aij + tile_i * T_TH * n + tile_j * T_TW;
-    const float *smem_subtile = smem + tile_i * T_TH * m + tile_j * T_TW;
+    float *smem_subtile = smem + tile_i * T_TH * m + tile_j * T_TW;
 
     // Compute Aij - sum
     #pragma unroll
     for (uint32_t ti = 0; ti < T_TH; ++ti) {
         // Vectorize
         const float4 *a4 = reinterpret_cast<const float4*>(Aij_subtile + ti * n);
-        float4 *out4 = reinterpret_cast<float4*>(out + ti * T_TW);
+        float4 *reg4 = reinterpret_cast<float4*>(reg + ti * T_TW);
         float4 *smem4 = reinterpret_cast<float4*>(smem_subtile + ti * m);
         #pragma unroll
         for (uint32_t tj = 0; tj < T_TW / 4; ++tj) {
             // A - sum
             float4 a = a4[tj];
-            float4 o = out4[tj];
+            float4 o = reg4[tj];
 
             // Write back to SMEM
             smem4[tj] = {a.x - o.x, a.y - o.y, a.z - o.z, a.w - o.w};
@@ -109,16 +113,21 @@ __global__ void block_kernel(const float *A, float *L, // input matrix, Chol mat
         // TRSM
         float *Lij = L + i * m * n + j * m;
         float *Ljj = L + j * m * n + j * m;
-        block_trsm(Ljj, Lij, smem, n, m); // A, X, B
+        float *Aij = smem;
+        block_trsm(Ljj, Lij, Aij, n, m); // A, X, B
     }
 }
 
+template <uint32_t T_TH, uint32_t T_TW>
 __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matrix
     const uint32_t n, const uint32_t m, // matrix size, block size
     const uint32_t j // block col
 ) {
+    // Setup smem
+    extern __shared__ float smem[];
+
     // Update
-    block_update<T_TH, T_TW>(A, L, n, m, i, j, smem);
+    block_update<T_TH, T_TW>(A, L, n, m, j, j, smem);
 
     // Chol
     const float *Ajj = A + j * m * n + j * m;
@@ -135,12 +144,25 @@ void launch_block_cholesky(
     // Divide the grid into blocks
     constexpr uint32_t m = 64;
 
+    // Setup smem
+    constexpr int smem_size_bytes = m * m * 2 * sizeof(float); // need to store 2 blocks in smem
+    cudaFuncSetAttribute(
+        chol_kernel<4, 4>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        smem_size_bytes
+    );
+    cudaFuncSetAttribute(
+        block_kernel<4, 4>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        smem_size_bytes
+    );
+
     // Iterate over block cols launching a kernel for each step
     for (uint32_t j = 0; j < n / m; ++j) {
         // Step 1: Chol(update) diagonal block
-        chol_kernel<4, 4><<<1, 8*32>>>(in, out, n, m, j);
+        chol_kernel<4, 4><<<1, 32, smem_size_bytes>>>(in, out, n, m, j);
 
         // Step 2: Trsm(update) all other blocks
-        block_kernel<4, 4><<<48, 8*32>>>(in, out, n, m, j);
+        block_kernel<4, 4><<<48, 8*32, smem_size_bytes>>>(in, out, n, m, j);
     }
 }

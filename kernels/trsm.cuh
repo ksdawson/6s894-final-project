@@ -69,7 +69,7 @@ __device__ void block_forward_substitution(float const *A, float *x, float const
       if constexpr (b_row)
         xi = (b[i] - sum) / A[i * n + i];
       else
-        xi = (b[i * n] - sum) / A[i * n + i];
+        xi = (b[i * m] - sum) / A[i * n + i];
       if constexpr (x_row)
         x[i] = xi;
       else
@@ -119,6 +119,9 @@ __device__ void block_trsm(float const *A, float *X, float const *B,
     float const *b = B + i; // col
     block_forward_substitution<true, false>(A, x, b, n, m);
   }
+
+  // Wait for everything to be done
+  __syncthreads();
 }
 
 __global__ void trsm_kernel(uint32_t n, const float *A, float *X,
