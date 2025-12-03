@@ -385,27 +385,27 @@ void test_trsm(uint32_t N) {
 // Entry point
 
 int main(int argc, char **argv) {
-    // printf("Testing CPU naive\n");
-    // test_case_3x3_cpu();
-    // printf("\n");
+    printf("Testing CPU naive\n");
+    test_case_3x3_cpu();
+    printf("\n");
 
-    // printf("Testing GPU naive\n");
-    // test_case_3x3_gpu();
-    // test_case_gpu(50, launch_cholesky_gpu_naive);
-    // printf("\n");
+    printf("Testing GPU naive\n");
+    test_case_3x3_gpu();
+    test_case_gpu(50, launch_cholesky_gpu_naive);
+    printf("\n");
 
-    // printf("Testing TRSM naive\n");
-    // srand(0);
-    // // Test forward substitution
-    // test_forward_substitution(4);
-    // test_forward_substitution(8);
-    // test_forward_substitution(16);
-    // test_forward_substitution(1024);
-    // // Test trsm
-    // test_trsm(2);
-    // test_trsm(4);
-    // test_trsm(8);
-    // test_trsm(16);
+    printf("Testing TRSM naive\n");
+    srand(0);
+    // Test forward substitution
+    test_forward_substitution(4);
+    test_forward_substitution(8);
+    test_forward_substitution(16);
+    test_forward_substitution(1024);
+    // Test trsm
+    test_trsm(2);
+    test_trsm(4);
+    test_trsm(8);
+    test_trsm(16);
 
     printf("Testing GPU block\n");
     printf("1x1 block Cholesky\n");
