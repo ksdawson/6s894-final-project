@@ -36,8 +36,6 @@ struct BlockUpdate {
     float *smem; // use for read-only data reuse
 };
 
-namespace kernel_fusion {
-
 template <uint32_t T_TH, uint32_t T_TW>
 __device__ void block_gemm_naive(BlockUpdate input, const uint32_t k) {
     auto [A, L, n, m, i, j, reg, smem] = input;
@@ -174,8 +172,6 @@ void launch_block_cholesky(
         // Step 2: Trsm(update) all other blocks
         block_kernel<4, 4><<<48, 8*32, smem_size_bytes>>>(in, out, n, m, j);
     }
-}
-
 }
 
 }

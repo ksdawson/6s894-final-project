@@ -1,5 +1,5 @@
 // TL+ {"compile_flags": ["-lcuda"]}
-// TL+ {"header_files": ["utils.cuh", "cholesky.cuh", "trsm.cuh", "gpu_block_kernel_fusion.cuh", "cholesky_small.cuh", "trsm_small.cuh"]}
+// TL+ {"header_files": ["utils.cuh", "cholesky.cuh", "trsm.cuh", "gpu_block_kernel_fusion.cuh", "cholesky_small.cuh", "trsm_small.cuh", "gpu_block_enhanced_kernel_fusion.cuh"]}
 // TL+ {"workspace_files": []}
 #include <chrono>
 #include <cstdint>
@@ -18,6 +18,7 @@
 //#include "cholesky.cuh"
 #include "trsm.cuh"
 #include "gpu_block_kernel_fusion.cuh"
+#include "gpu_block_enhanced_kernel_fusion.cuh"
 
 // #define CUDA_CHECK(x) \
 //   do { \
@@ -42,6 +43,7 @@ enum class Phase {
     TRSM,
     CHOLESKY_SMALL,
     TRSM_SMALL,
+    ENHANCED_CHOLESKY
 };
 
 struct BenchmarkResults {
@@ -330,7 +332,7 @@ struct Cholesky {
         float *c,
         float const *b,
         void *workspace) {
-        block_cholesky_space::kernel_fusion::launch_block_cholesky(size, a, c, workspace);
+        block_cholesky_space::launch_block_cholesky(size, a, c, workspace);
     }
 };
 
