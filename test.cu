@@ -1,5 +1,5 @@
 // TL+ {"compile_flags": ["-lcuda"]}
-// TL+ {"header_files": ["gpu_naive.cuh", "cpu.cuh", "utils.cuh", "trsm.cuh", "gpu_block_kernel_fusion.cuh", "gpu_block_enhanced_kernel_fusion.cuh"]}
+// TL+ {"header_files": ["cholesky_small.cuh", "cpu.cuh", "utils.cuh", "trsm_small.cuh", "gpu_block_kernel_fusion.cuh", "gpu_block_enhanced_kernel_fusion.cuh"]}
 // TL {"workspace_files": []}
 
 #include <cstdint>
@@ -8,9 +8,9 @@
 #include <math.h>
 #include <stdio.h>
 #include "cpu.cuh"
-#include "gpu_naive.cuh"
+#include "cholesky_small.cuh"
 #include "utils.cuh"
-#include "trsm.cuh"
+#include "trsm_small.cuh"
 #include "gpu_block_kernel_fusion.cuh"
 #include "gpu_block_enhanced_kernel_fusion.cuh"
 
@@ -103,7 +103,8 @@ void test_case_3x3_gpu() {
     CUDA_CHECK(cudaMemcpy(in_gpu, cpu, n * n * sizeof(float), cudaMemcpyHostToDevice));
 
     // Run Cholesky decomposition
-    launch_cholesky_gpu_naive(n, in_gpu, out_gpu);
+    void *workspace = nullptr;
+    cholesky_small::launch_cholesky(n, in_gpu, out_gpu, workspace);
 
     // Verify output
     CUDA_CHECK(cudaMemcpy(cpu, out_gpu, n * n * sizeof(float), cudaMemcpyDeviceToHost));
@@ -179,7 +180,7 @@ void generate_spd_matrix(uint32_t N, float* A) {
 
 // Test case for any size
 void test_case_gpu(uint32_t N,
-    void (*chol)(const uint32_t n, float const *in, float *out)
+    void (*chol)(const uint32_t n, float const *in, float *out, void *workspace)
 ) {
     printf("Testing Cholesky %ux%u\n", N, N);
 
@@ -197,7 +198,8 @@ void test_case_gpu(uint32_t N,
     CUDA_CHECK(cudaMemcpy(in_gpu, in_cpu, N * N * sizeof(float), cudaMemcpyHostToDevice));
 
     // Run Cholesky
-    chol(N, in_gpu, out_gpu);
+    void *workspace = nullptr;
+    chol(N, in_gpu, out_gpu, workspace);
 
     // Copy result back to host
     CUDA_CHECK(cudaMemcpy(out_cpu, out_gpu, N * N * sizeof(float), cudaMemcpyDeviceToHost));
@@ -281,7 +283,7 @@ void test_forward_substitution(uint32_t N) {
   CUDA_CHECK(cudaMemset(x_d, 0, N * sizeof(float)));
 
   // Launch with one warp (since function assumes warp-level sum)
-  forward_substitution_kernel<<<1, 32>>>(N, A_d, x_d, b_d);
+  trsm_small::forward_substitution_kernel<<<1, 32>>>(N, A_d, x_d, b_d);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   CUDA_CHECK(cudaMemcpy(x_gpu, x_d, N * sizeof(float), cudaMemcpyDeviceToHost));
@@ -350,7 +352,7 @@ void test_trsm(uint32_t N) {
   CUDA_CHECK(cudaMemset(X_d, 0, N * N * sizeof(float)));
 
   // Launch kernel (1 block, multiple warps)
-  trsm_kernel<<<1, 32 * 32>>>(N, L_d, X_d, B_d);
+  trsm_small::trsm_kernel<<<1, 32 * 32>>>(N, L_d, X_d, B_d);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   CUDA_CHECK(
@@ -392,7 +394,7 @@ int main(int argc, char **argv) {
 
     printf("Testing GPU naive\n");
     test_case_3x3_gpu();
-    test_case_gpu(50, launch_cholesky_gpu_naive);
+    test_case_gpu(50, cholesky_small::launch_cholesky);
     printf("\n");
 
     printf("Testing TRSM naive\n");
@@ -411,13 +413,13 @@ int main(int argc, char **argv) {
 
     printf("Testing GPU block w/ kernel fusion\n");
     printf("1x1 block Cholesky\n");
-    test_case_gpu(64, kernel_fusion::launch_block_cholesky);
+    test_case_gpu(64, block_cholesky_space::kernel_fusion::launch_block_cholesky);
     printf("2x2 block Cholesky\n");
-    test_case_gpu(128, kernel_fusion::launch_block_cholesky);
+    test_case_gpu(128, block_cholesky_space::kernel_fusion::launch_block_cholesky);
     printf("4x4 block Cholesky\n");
-    test_case_gpu(256, kernel_fusion::launch_block_cholesky);
+    test_case_gpu(256, block_cholesky_space::kernel_fusion::launch_block_cholesky);
     printf("8x8 block Cholesky\n");
-    test_case_gpu(512, kernel_fusion::launch_block_cholesky);
+    test_case_gpu(512, block_cholesky_space::kernel_fusion::launch_block_cholesky);
     printf("\n");
 
     printf("Testing GPU block w/ enhanced kernel fusion\n");

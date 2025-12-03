@@ -18,8 +18,6 @@ size_t get_workspace_size(int32_t size) {
     return 0;
 }
 
-
-
 __device__ void cholesky(
     const uint32_t n, float const *in, float *out
 ) {
@@ -56,8 +54,6 @@ __global__ void cholesky_gpu_naive(
 ) {
     cholesky(n, in, out);
 }
-
-
 
 ////////////////////////////////////////////////////////////////////////////////
 // Block methods

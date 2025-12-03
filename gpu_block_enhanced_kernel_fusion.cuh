@@ -1,5 +1,5 @@
 // TL+ {"compile_flags": ["-lcuda"]}
-// TL+ {"header_files": ["trsm.cuh", "gpu_naive.cuh", "gpu_block_kernel_fusion.cuh"]}
+// TL+ {"header_files": ["trsm_small.cuh", "cholesky_small.cuh", "gpu_block_kernel_fusion.cuh"]}
 // TL {"workspace_files": []}
 
 #pragma once
@@ -7,8 +7,8 @@
 #include <cstdio>
 #include <cuda_runtime.h>
 #include <math.h>
-#include "trsm.cuh"
-#include "gpu_naive.cuh"
+#include "trsm_small.cuh"
+#include "cholesky_small.cuh"
 #include "gpu_block_kernel_fusion.cuh"
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -16,8 +16,12 @@
 
 namespace alt_kernel_fusion {
 
+size_t get_workspace_size(int32_t size) {
+    return 0;
+}
+
 template <uint32_t T_TH, uint32_t T_TW>
-__device__ void diagonal_block_gemm_naive(BlockUpdate input) {
+__device__ void diagonal_block_gemm_naive(block_cholesky_space::BlockUpdate input) {
     auto [A, L, n, m, i, j, reg, smem] = input;
 
     // Matrix to multiply
@@ -54,11 +58,11 @@ __device__ void diagonal_block_update(float *A, float *L,
     float reg[T_TH * T_TW] = {0.0f}; // zero-init
 
     // Compute Lij * Lij^T
-    BlockUpdate input = {A, L, n, m, i, j, reg, smem};
+    block_cholesky_space::BlockUpdate input = {A, L, n, m, i, j, reg, smem};
     diagonal_block_gemm_naive<T_TH, T_TW>(input);
 
     // Move A to Aii
-    float *Aii = get_block(A, i, i, n, m);
+    float *Aii = block_cholesky_space::get_block(A, i, i, n, m);
 
     // Move to subtile
     const uint32_t tile_i = threadIdx.x / (m / T_TW);
@@ -90,16 +94,16 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
     // Each SM gets a block
     for (uint32_t i = j + 1 + blockIdx.x; i < n / m; i += gridDim.x) {
         // Update
-        kernel_fusion::block_update<T_TH, T_TW>(A, L, n, m, i, j, smem);
+        block_cholesky_space::kernel_fusion::block_update<T_TH, T_TW>(A, L, n, m, i, j, smem);
 
         // TRSM
         float *Lij = smem2;
-        float *Ljj = get_block(L, j, j, n, m);
+        float *Ljj = block_cholesky_space::get_block(L, j, j, n, m);
         float *Aij = smem;
-        block_trsm(Ljj, Lij, Aij, n, m, m, m); // A, X, B
+        trsm_small::block_trsm(Ljj, Lij, Aij, n, m, m, m); // A, X, B
 
         // Write back Lij
-        Lij = get_block(L, i, j, n, m);
+        Lij = block_cholesky_space::get_block(L, i, j, n, m);
         for (uint32_t idx = threadIdx.x; idx < m * m; idx += blockDim.x) {
             const uint32_t ti = idx / m;
             const uint32_t tj = idx % m;
@@ -120,16 +124,16 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
     // Only 1 SM participates
 
     // Chol (only first warp participates)
-    const float *Ajj = get_block(A, j, j, n, m);
-    float *Ljj = get_block(L, j, j, n, m);
-    block_cholesky(Ajj, Ljj, n, n, m);
+    const float *Ajj = block_cholesky_space::get_block(A, j, j, n, m);
+    float *Ljj = block_cholesky_space::get_block(L, j, j, n, m);
+    cholesky_small::block_cholesky(Ajj, Ljj, n, n, m);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // Host functions
 
 void launch_block_cholesky(
-    const uint32_t n, float const *in, float *out
+    const uint32_t n, float const *in, float *out, void *workspace
 ) {
     // Divide the grid into blocks
     constexpr uint32_t m = 64;

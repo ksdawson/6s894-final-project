@@ -177,3 +177,5 @@ void launch_block_cholesky(
 }
 
 }
+
+}
