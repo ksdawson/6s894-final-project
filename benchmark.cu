@@ -141,7 +141,7 @@ TestData generate_test_data(
     Phase phase) {
     auto data = TestData{};
     for (auto const &config : configs) {
-        if (phase == Phase::CHOLESKY || phase == Phase::CHOLESKY_SMALL) {
+        if (phase == Phase::CHOLESKY || phase == Phase::CHOLESKY_SMALL || phase == Phase::ENHANCED_CHOLESKY) {
             auto size = config.size;
             data.c[{size}] = generate_lower_triangular_matrix(size);
             data.a[{size}] = chol_generate(data.c[{size}], size);
@@ -225,7 +225,7 @@ void run_config(
 
     printf("  %6d", size);
 
-    if (phase == Phase::CHOLESKY || phase == Phase::CHOLESKY_SMALL) {
+    if (phase == Phase::CHOLESKY || phase == Phase::CHOLESKY_SMALL || phase == Phase::ENHANCED_CHOLESKY) {
         
     } else if (phase == Phase::TRSM || phase == Phase::TRSM_SMALL) {
         auto const &b = data.b.at({size});
@@ -387,6 +387,22 @@ struct TrsmSmall {
     }
 };
 
+struct CholeskyEnhanced {
+    constexpr static char const *name = "cholesky_enhanced";
+
+    static size_t get_workspace_size(int32_t size) {
+        return alt_kernel_fusion::get_workspace_size(size);
+    }
+
+    static void
+    run(int32_t size,
+        float const *a,
+        float *c,
+        float const *b,
+        void *workspace) {
+        alt_kernel_fusion::launch_block_cholesky(size, a, c, workspace);
+    }
+};
 
 // can add more structs here for other implementations of Cholesky decompositions -- XY
 
@@ -403,6 +419,8 @@ std::vector<BenchmarkResults> run_all_impls(
         results.push_back(run_all_configs<TrsmSmall>(phase, data, configs));
     } else if (phase == Phase::TRSM) {
         results.push_back(run_all_configs<Trsm>(phase, data, configs));
+    } else if (phase == Phase::ENHANCED_CHOLESKY) {
+        results.push_back(run_all_configs<CholeskyEnhanced>(phase, data, configs));
     }
     return results;
 }
@@ -455,9 +473,11 @@ int main(int argc, char **argv) {
         // {1024},
         // {2048},
     };
-    // auto data_cholesky = generate_test_data(configs, Phase::CHOLESKY);
-    // run_all_impls(Phase::CHOLESKY, data_cholesky, configs);
-    // run_all_impls(Phase::CHOLESKY_SMALL, data_cholesky, configs);
+    auto data_cholesky = generate_test_data(configs, Phase::CHOLESKY);
+    run_all_impls(Phase::ENHANCED_CHOLESKY, data_cholesky, configs);
+    run_all_impls(Phase::CHOLESKY, data_cholesky, configs);
+    run_all_impls(Phase::CHOLESKY_SMALL, data_cholesky, configs);
+    
 
     auto data_trsm = generate_test_data(configs, Phase::TRSM);
     run_all_impls(Phase::TRSM_SMALL, data_trsm, configs);
