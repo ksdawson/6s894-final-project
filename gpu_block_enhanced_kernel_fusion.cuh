@@ -83,6 +83,7 @@ __device__ void diagonal_block_update(float *A, float *L,
 }
 
 template <uint32_t T_TH, uint32_t T_TW>
+__launch_bounds__(256)
 __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
     const uint32_t n, const uint32_t m, // matrix size, block size
     const uint32_t j // block col
@@ -126,6 +127,7 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
     }
 }
 
+__launch_bounds__(32)
 __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matrix
     const uint32_t n, const uint32_t m, // matrix size, block size
     const uint32_t j // block col
