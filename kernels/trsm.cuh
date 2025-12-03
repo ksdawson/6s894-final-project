@@ -46,6 +46,42 @@ __device__ void forward_substitution(const uint32_t n, float const *A, float *x,
   }
 }
 
+__global__ void forward_substitution_kernel(uint32_t n, const float *A,
+                                            float *x, const float *b) {
+  forward_substitution<true, true>(n, A, x, b);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// TRSM
+// In Cholesky, we want to solve L_ik = A_ik * L_kk^-T, but inverse is
+// expensive. Instead solve L_kk * L_ik^T = A_ik, which can be done with TRSM.
+// TRSM uses forward substitution in each row. It is sequential in a row, but
+// all rows are independent.
+
+__device__ void trsm(const uint32_t n, float const *A, float *X,
+                     float const *B) {
+  // Assumes we're solving for X in A * X^T = B, so we can use rows of X instead
+  // of cols
+  // Get grid-level warp idx
+  const uint32_t warps = blockDim.x / 32;
+  const uint32_t warp_idx = warps * blockIdx.x + threadIdx.x / 32;
+
+  // Iterate over rows of X,B with each row handled by one warp
+  for (uint32_t i = warp_idx; i < n; i += warps * gridDim.x) {
+    float *x = X + i * n;   // row
+    float const *b = B + i; // col
+    forward_substitution<true, false>(n, A, x, b);
+  }
+}
+
+__global__ void trsm_kernel(uint32_t n, const float *A, float *X,
+                            const float *B) {
+  trsm(n, A, X, B);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Block methods
+
 template <bool x_row, bool b_row>
 __device__ void block_forward_substitution(float const *A, float *x, float const *b,
   const uint32_t n, const uint32_t m
@@ -80,53 +116,16 @@ __device__ void block_forward_substitution(float const *A, float *x, float const
   }
 }
 
-__global__ void forward_substitution_kernel(uint32_t n, const float *A,
-                                            float *x, const float *b) {
-  forward_substitution<true, true>(n, A, x, b);
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// TRSM
-// In Cholesky, we want to solve L_ik = A_ik * L_kk^-T, but inverse is
-// expensive. Instead solve L_kk * L_ik^T = A_ik, which can be done with TRSM.
-// TRSM uses forward substitution in each row. It is sequential in a row, but
-// all rows are independent.
-
-__device__ void trsm(const uint32_t n, float const *A, float *X,
-                     float const *B) {
-  // Assumes we're solving for X in A * X^T = B, so we can use rows of X instead
-  // of cols
-  // Get grid-level warp idx
-  const uint32_t warps = blockDim.x / 32;
-  const uint32_t warp_idx = warps * blockIdx.x + threadIdx.x / 32;
-
-  // Iterate over rows of X,B with each row handled by one warp
-  for (uint32_t i = warp_idx; i < n; i += warps * gridDim.x) {
-    float *x = X + i * n;   // row
-    float const *b = B + i; // col
-    forward_substitution<true, false>(n, A, x, b);
-  }
-}
-
 __device__ void block_trsm(float const *A, float *X, float const *B,
   const uint32_t n, const uint32_t m
 ) {
-  const uint32_t warps = blockDim.x / 32;
-  const uint32_t warp_idx = warps * blockIdx.x + threadIdx.x / 32;
-
-  for (uint32_t i = warp_idx; i < m; i += warps * gridDim.x) {
-    float *x = X + i * n;   // row
-    // float const *b = B + i; // col
-    // block_forward_substitution<true, false>(A, x, b, n, m);
+  // Done at the SM level
+  for (uint32_t i = threadIdx.x / 32; i < m; i += blockDim.x / 32) {
+    float *x = X + i * n; // row
     float const *b = B + i * m; // row
     block_forward_substitution<true, true>(A, x, b, n, m);
   }
 
   // Wait for everything to be done
   __syncthreads();
-}
-
-__global__ void trsm_kernel(uint32_t n, const float *A, float *X,
-                            const float *B) {
-  trsm(n, A, X, B);
 }

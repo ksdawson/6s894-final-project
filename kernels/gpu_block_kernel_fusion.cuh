@@ -11,6 +11,12 @@
 #include "gpu_naive.cuh"
 
 ////////////////////////////////////////////////////////////////////////////////
+// Helper functions
+
+__device__ float* get_block(float *A, const uint32_t i, const uint32_t j, const uint32_t n, const uint32_t m) { return A + i * m * n + j * m; }
+__device__ const float* get_block(const float *A, const uint32_t i, const uint32_t j, const uint32_t n, const uint32_t m) { return A + i * m * n + j * m; }
+
+////////////////////////////////////////////////////////////////////////////////
 // Device functions
 
 struct BlockUpdate {
@@ -29,20 +35,22 @@ __device__ void block_gemm_naive(BlockUpdate input, const uint32_t k) {
     auto [A, L, n, m, i, j, reg, smem] = input;
 
     // Matrices to multiply
-    float *Lik = L + i * m * n + k * m;
-    float *Ljk = L + j * m * n + k * m;
+    float *Lik = get_block(L, i, k, n, m);
+    float *Ljk = get_block(L, j, k, n, m);
 
     // Move to subtile
     const uint32_t tile_i = threadIdx.x / (m / T_TW);
     const uint32_t tile_j = threadIdx.x % (m / T_TW);
-    float *Lik_subtile = Lik + tile_i * T_TH * n + tile_j * T_TW;
-    float *Ljk_subtile = Ljk + tile_i * T_TH * n + tile_j * T_TW;
+    float *_Lik = Lik + tile_i * T_TH * n;
+    float *_Ljk = Ljk + tile_j * T_TH * n;
 
     // Each thread handles a tile
+    #pragma unroll
     for (uint32_t ti = 0; ti < T_TH; ++ti) {
+        #pragma unroll
         for (uint32_t tj = 0; tj < T_TW; ++tj) {
             for (uint32_t tk = 0; tk < m; ++tk) {
-                reg[ti * T_TW + tj] += Lik_subtile[ti * n + tk] * Ljk_subtile[tj * n + tk];
+                reg[ti * T_TW + tj] += _Lik[ti * n + tk] * _Ljk[tj * n + tk];
             }
         }
     }
@@ -67,29 +75,20 @@ __device__ void block_update(const float *A, float *L,
     }
 
     // Move A to Aij 
-    const float *Aij = A + i * m * n + j * m;
+    const float *Aij = get_block(A, i, j, n, m);
 
     // Move to subtile
     const uint32_t tile_i = threadIdx.x / (m / T_TW);
     const uint32_t tile_j = threadIdx.x % (m / T_TW);
-    const float *Aij_subtile = Aij + tile_i * T_TH * n + tile_j * T_TW;
-    float *smem_subtile = smem + tile_i * T_TH * m + tile_j * T_TW;
+    const float *_Aij = Aij + tile_i * T_TH * n + tile_j * T_TW;
+    float *_Aij_p = smem + tile_i * T_TH * m + tile_j * T_TW;
 
     // Compute Aij - sum
     #pragma unroll
     for (uint32_t ti = 0; ti < T_TH; ++ti) {
-        // Vectorize
-        const float4 *a4 = reinterpret_cast<const float4*>(Aij_subtile + ti * n);
-        float4 *reg4 = reinterpret_cast<float4*>(reg + ti * T_TW);
-        float4 *smem4 = reinterpret_cast<float4*>(smem_subtile + ti * m);
         #pragma unroll
-        for (uint32_t tj = 0; tj < T_TW / 4; ++tj) {
-            // A - sum
-            float4 a = a4[tj];
-            float4 o = reg4[tj];
-
-            // Write back to SMEM
-            smem4[tj] = {a.x - o.x, a.y - o.y, a.z - o.z, a.w - o.w};
+        for (uint32_t tj = 0; tj < T_TW; ++tj) {
+            _Aij_p[ti * m + tj] = _Aij[ti * n + tj] - reg[ti * T_TW + tj];
         }
     }
 
@@ -111,8 +110,8 @@ __global__ void block_kernel(const float *A, float *L, // input matrix, Chol mat
         block_update<T_TH, T_TW>(A, L, n, m, i, j, smem);
 
         // TRSM
-        float *Lij = L + i * m * n + j * m;
-        float *Ljj = L + j * m * n + j * m;
+        float *Lij = get_block(L, i, j, n, m);
+        float *Ljj = get_block(L, j, j, n, m);
         float *Aij = smem;
         block_trsm(Ljj, Lij, Aij, n, m); // A, X, B
     }
@@ -123,17 +122,17 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
     const uint32_t n, const uint32_t m, // matrix size, block size
     const uint32_t j // block col
 ) {
-    // Only uses 1 SM
+    // Only 1 SM participates
 
     // Setup smem
     extern __shared__ float smem[];
 
-    // Update (uses all threads)
+    // Update (all threads participate)
     block_update<T_TH, T_TW>(A, L, n, m, j, j, smem);
 
-    // Chol (only uses first warp)
-    const float *Ajj = A + j * m * n + j * m;
-    float *Ljj = L + j * m * n + j * m;
+    // Chol (only first warp participates)
+    float *Ajj = smem;
+    float *Ljj = get_block(L, j, j, n, m);
     block_cholesky(Ajj, Ljj, n, m);
 }
 
