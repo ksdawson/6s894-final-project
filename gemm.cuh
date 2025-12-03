@@ -35,108 +35,85 @@ __device__ void gemm_naive_XY(
     }
 }
 
-__device__ void index (int32_t row_ID, int32_t col_ID, int32_t offset_col, int32_t offset_row, int32_t dim) {
+struct BlockUpdate {
+    float const *A; // input matrix
+    float const *L; // Chol matrix
+    const uint32_t n; // matrix size
+    const uint32_t m; // block size
+    const uint32_t i; // Lik * Ljk^T
+    const uint32_t j;
+    float *out; // add result to out (likely register array)
+};
+
+__device__ int32_t index (int32_t row_ID, int32_t col_ID, int32_t offset_col, int32_t offset_row, int32_t dim) {
     return (offset_col + row_ID) * dim + (offset_row + col_ID);
 }
 
-__device__ void block_gemm (Gemm_Struct gemm_info, float *shared_mem, int32_t tile_size) {
+template <int32_t T_TH, int32_t T_TW>
+__device__ void block_gemm (BlockUpdate gemm_info, const uint32_t k, float *shared_mem) {
 
-    int32_t N = gemm_info.N;
-    int32_t block_n = gemm_info.block_n;
-    float const *B1 = gemm_info.B1;
-    float const *B2 = gemm_info.B2;
+    int32_t N = gemm_info.n;
+    int32_t block_n = gemm_info.m;
+    float const *B1 = gemm_info.L;
+    float const *B2 = gemm_info.L;
     float *out = gemm_info.out;
-    int32_t B1_row_offset = gemm_info.B1_row_offset;
-    int32_t B1_col_offset = gemm_info.B1_col_offset;
-    int32_t B2_row_offset = gemm_info.B2_row_offset;
-    int32_t B2_col_offset = gemm_info.B2_col_offset;
+    int32_t B1_row_offset = k * block_n;
+    int32_t B1_col_offset = gemm_info.i * block_n;
+    int32_t B2_row_offset = k * block_n;
+    int32_t B2_col_offset = gemm_info.j * block_n;
 
-    
-
-    shared_mem[index(row_ID, col_ID, 0, 0, block_n)] = B1[index(row_ID, col_ID, B1_col_offset, B1_row_offset, N)];
-    shared_mem[index(row_ID, col_ID, 0, 0, block_n) + block_n * block_n] = B2[index(row_ID, col_ID, B2_col_offset, B2_row_offset, N)];
+    for (int32_t i = 0; i < block_n * block_n; i += blockDim.x) {
+        int32_t row_ID = (int32_t)((i + threadIdx.x) / block_n);
+        int32_t col_ID = int32_t((i + threadIdx.x) % block_n);
+        shared_mem[threadIdx.x + i] = B1[index(row_ID, col_ID, B1_col_offset, B1_row_offset, N)];
+        shared_mem[threadIdx.x + i + block_n * block_n] = B2[index(row_ID, col_ID, B2_col_offset, B2_row_offset, N)];
+    }
     __syncthreads();
 
-    int32_t col_ID = threadIdx.x % block_n;
-    int32_t row_ID = threadIdx.x / block_n;
+    int32_t row_ID = (int32_t)(threadIdx.x / 32) * T_TH;
+    int32_t col_ID = int32_t(threadIdx.x % 32) * T_TW;
 
-    float sum[tile_size * tile_size];
-    float a_val[tile_size];
+    float sum[T_TH * T_TW];
+    float b1_val[T_TH];
+    float b2_val[T_TW];
     #pragma unroll
-    for (int32_t i = 0; i < tile_size * tile_size; ++i) {
+    for (int32_t i = 0; i < T_TH * T_TW; ++i) {
         sum[i] = 0.0f;
     }
     #pragma unroll
-    for (int32_t i = 0; i < tile_size; ++i) {
-        a_val[i] = 0.0f;
+    for (int32_t i = 0; i < T_TH; ++i) {
+        b1_val[i] = 0.0f;
+    }
+    #pragma unroll
+    for (int32_t i = 0; i < T_TW; ++i) {
+        b2_val[i] = 0.0f;
     }
 
     for (int32_t i = 0; i < block_n; ++i) {
         // computing B1 * B2^T
-        for (int32_t tile_row = 0; tile_row < tile_size; ++tile_row) {
-            for (int32_t tile_col = 0; tile_col < tile_size; ++tile_col) {
+        for (int32_t tile_row = 0; tile_row < T_TH; ++tile_row) {
+            b1_val[tile_row] = shared_mem[index(row_ID + tile_row, i, 0, 0, block_n)];
+        }
+        for (int32_t tile_col = 0; tile_col < T_TW; ++tile_col) {
+            b2_val[tile_col] = shared_mem[index(col_ID + tile_col, i, 0, 0, block_n) + block_n * block_n];
+        }
 
+        for (int32_t tile_row = 0; tile_row < T_TH; ++tile_row) {
+            for (int32_t tile_col = 0; tile_col < T_TW; ++tile_col) {
+                sum[tile_row * T_TW + tile_col] += b1_val[tile_row] * b2_val[tile_col];
             }
         }
 
-        for (int32_t tile_row = 0; tile_row < tile_size; ++tile_row) {
-            for (int32_t tile_col = 0; tile_col < tile_size; ++tile_col) {
 
-            }
+    }
+
+    for (int32_t tile_row = 0; tile_row < T_TH; ++tile_row) {
+        for (int32_t tile_col = 0; tile_col < T_TW; ++tile_col) {
+            out[tile_row * T_TW + tile_col] += sum[tile_row * T_TW + tile_col];
         }
-        sum += shared_mem[index(row_ID, i, 0, 0, block_n)] * shared_mem[index(col_ID, i, 0, 0, block_n) + block_n * block_n];
     }
-    out[0] += sum;
+    __syncthreads();
 }
 
-struct Gemm_Struct {
-    int32_t N;
-    int32_t block_n;
-    float const *B1;
-    float const *B2;
-    float *out;
-    int32_t B1_row_offset;
-    int32_t B1_col_offset;
-    int32_t B2_row_offset;
-    int32_t B2_col_offset;
-}
 
-// Computes A-BB^T for one SM
-// N is now the total dimension of the matrix, block_n is the dimension of the block
-__device__ void gemm_one_SM(
-    Block_Update block_info, float *shared_mem
-) {
-
-    int32_t N = block_info.n;
-    int32_t block_n = block_info.m;
-    float const *A = block_info.A;
-    float const *B = block_info.L;
-    float *out = block_info.out;
-    int32_t offset_j = gemm_struct.j;
-    int32_t offset_i = gemm_struct.i;
-
-    Gemm_Struct gemm_struct;
-    gemm_struct.N = N;
-    gemm_struct.block_n = block_n;
-    gemm_struct.out = out;
-
-    out[0] = 0.0f;
-
-    for (int32_t k = 0; k < offset_j; ++k) {
-        gemm_struct.B1 = B;
-        gemm_struct.B2 = B;
-        gemm_struct.B1_col_offset = offset_i * block_n;
-        gemm_struct.B1_row_offset = k * block_n;
-        gemm_struct.B2_col_offset = offset_j * block_n;
-        gemm_struct.B2_row_offset = k * block_n;
-        gemm_helper(gemm_struct, shared_mem);
-    }
-
-    int32_t col_ID = threadIdx.x % block_n;
-    int32_t row_ID = threadIdx.x / block_n;
-    
-    // subtract out from A
-    // need to update with tile-size later-on!!!
-    out[0] = A[index(row_ID, col_ID, offset_i * block_n, offset_j * block_n, N)] - out[0];
-}
 } // namespace gemm_naive
