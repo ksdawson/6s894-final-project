@@ -1,7 +1,7 @@
 .PHONY: all clean gtrsm
 
 OUT_DIR := ./out
-CUDAFLAGS := -Wno-deprecated-gpu-targets -arch=sm_89
+CUDAFLAGS := -Wno-deprecated-gpu-targets -arch=sm_89 -lcublas
 ifeq ($(DEBUG),1)
 	CUDAFLAGS += -G -DDEBUG
 else
