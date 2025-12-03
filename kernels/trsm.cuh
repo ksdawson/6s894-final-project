@@ -116,8 +116,10 @@ __device__ void block_trsm(float const *A, float *X, float const *B,
 
   for (uint32_t i = warp_idx; i < m; i += warps * gridDim.x) {
     float *x = X + i * n;   // row
-    float const *b = B + i; // col
-    block_forward_substitution<true, false>(A, x, b, n, m);
+    // float const *b = B + i; // col
+    // block_forward_substitution<true, false>(A, x, b, n, m);
+    float const *b = B + i * m; // row
+    block_forward_substitution<true, true>(A, x, b, n, m);
   }
 
   // Wait for everything to be done

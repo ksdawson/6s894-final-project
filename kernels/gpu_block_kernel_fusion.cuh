@@ -58,7 +58,7 @@ __device__ void block_update(const float *A, float *L,
     float *smem
 ) {
     // Accumulate update results in registers w/ each thread getting a subtile
-    float reg[T_TH * T_TW]; // initialized to zero
+    float reg[T_TH * T_TW] = {0.0f}; // zero-init
 
     // Sum Lik * Ljk^T
     BlockUpdate input = {A, L, n, m, i, j, reg, smem};
@@ -106,7 +106,7 @@ __global__ void block_kernel(const float *A, float *L, // input matrix, Chol mat
     extern __shared__ float smem[];
 
     // Each SM gets a block
-    for (uint32_t i = j + 1 + blockIdx.x; i < n / m; ++i) {
+    for (uint32_t i = j + 1 + blockIdx.x; i < n / m; i += gridDim.x) {
         // Update
         block_update<T_TH, T_TW>(A, L, n, m, i, j, smem);
 
@@ -123,13 +123,15 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
     const uint32_t n, const uint32_t m, // matrix size, block size
     const uint32_t j // block col
 ) {
+    // Only uses 1 SM
+
     // Setup smem
     extern __shared__ float smem[];
 
-    // Update
+    // Update (uses all threads)
     block_update<T_TH, T_TW>(A, L, n, m, j, j, smem);
 
-    // Chol
+    // Chol (only uses first warp)
     const float *Ajj = A + j * m * n + j * m;
     float *Ljj = L + j * m * n + j * m;
     block_cholesky(Ajj, Ljj, n, m);
@@ -160,7 +162,7 @@ void launch_block_cholesky(
     // Iterate over block cols launching a kernel for each step
     for (uint32_t j = 0; j < n / m; ++j) {
         // Step 1: Chol(update) diagonal block
-        chol_kernel<4, 4><<<1, 32, smem_size_bytes>>>(in, out, n, m, j);
+        chol_kernel<4, 4><<<1, 8*32, smem_size_bytes>>>(in, out, n, m, j);
 
         // Step 2: Trsm(update) all other blocks
         block_kernel<4, 4><<<48, 8*32, smem_size_bytes>>>(in, out, n, m, j);

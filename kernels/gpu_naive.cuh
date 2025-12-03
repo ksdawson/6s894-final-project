@@ -47,30 +47,32 @@ __device__ void cholesky(
 __device__ void block_cholesky(float const *A, float *L,
     const uint32_t n, const uint32_t m
 ) {
-    // Iterate over all rows
-    for (uint32_t i = 0; i < m; ++i) {
-        // Iterate over lower triangle off-diagonal cols
-        for (uint32_t j = 0; j < i; ++j) {
-            // Each thread computes a piece of the sum
+    if (threadIdx.x < 32) {
+        // Iterate over all rows
+        for (uint32_t i = 0; i < m; ++i) {
+            // Iterate over lower triangle off-diagonal cols
+            for (uint32_t j = 0; j < i; ++j) {
+                // Each thread computes a piece of the sum
+                float tmp = 0.0f;
+                for (uint32_t k = threadIdx.x; k < j; k += 32) {
+                    tmp += L[i * n + k] * L[j * n + k];
+                }
+                // Combine the sum across the warp
+                tmp = utils::warp_prefix_sum<float>(tmp);
+                // Last thread handles writing it back
+                if (threadIdx.x == 31) {
+                    L[i * n + j] = (A[i * n + j] - tmp) / L[j * n + j];
+                }
+            }
+            // Handle diagonal col
             float tmp = 0.0f;
-            for (uint32_t k = threadIdx.x; k < j; k += 32) {
-                tmp += L[i * n + k] * L[j * n + k];
+            for (uint32_t k = threadIdx.x; k < i; k += 32) {
+                tmp += L[i * n + k] * L[i * n + k];
             }
-            // Combine the sum across the warp
             tmp = utils::warp_prefix_sum<float>(tmp);
-            // Last thread handles writing it back
             if (threadIdx.x == 31) {
-                L[i * n + j] = (A[i * n + j] - tmp) / L[j * n + j];
+                L[i * n + i] = sqrtf((A[i * n + i] - tmp));
             }
-        }
-        // Handle diagonal col
-        float tmp = 0.0f;
-        for (uint32_t k = threadIdx.x; k < i; k += 32) {
-            tmp += L[i * n + k] * L[i * n + k];
-        }
-        tmp = utils::warp_prefix_sum<float>(tmp);
-        if (threadIdx.x == 31) {
-            L[i * n + i] = sqrtf((A[i * n + i] - tmp));
         }
     }
 }
