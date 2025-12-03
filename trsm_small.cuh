@@ -156,8 +156,6 @@ __device__ void trsm_kernel_XY(const uint32_t n, float const *A, float *X, float
   // }
 }
 
-
-
 ////////////////////////////////////////////////////////////////////////////////
 // Block methods
 
@@ -213,6 +211,7 @@ __device__ void block_trsm(float const *A, float *X, float const *B,
 
 void launch_trsm(
   const uint32_t n, float const *A, float *X, float const *B, void *workspace) {
-  trsm_kernel<<<1, 32>>>(n, A, X, B);
+  trsm_kernel<<<48, 32*32>>>(n, A, X, B);
 }
+
 }

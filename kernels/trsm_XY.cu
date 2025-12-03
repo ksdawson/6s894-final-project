@@ -10,15 +10,6 @@
 #include <math.h>
 #include <stdio.h>
 
-<<<<<<< HEAD:kernels/trsm.cu
-=======
-// Macro to check CUDA errors
-#define CUDA_CHECK(x) \
-  do { \
-      utils::cuda_check((x), __FILE__, __LINE__); \
-  } while (0)
-
->>>>>>> test_benchmark:kernels/trsm_XY.cu
 ////////////////////////////////////////////////////////////////////////////////
 // Substitution methods
 
@@ -133,9 +124,6 @@ __device__ void block_trsm(float const *A, float *X, float const *B,
 __global__ void trsm_kernel(uint32_t n, const float *A, float *X,
                             const float *B) {
   trsm(n, A, X, B);
-<<<<<<< HEAD:kernels/trsm.cu
-}
-=======
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -360,4 +348,3 @@ int main() {
   //test_trsm(16);
   return 0;
 }
->>>>>>> test_benchmark:kernels/trsm_XY.cu
