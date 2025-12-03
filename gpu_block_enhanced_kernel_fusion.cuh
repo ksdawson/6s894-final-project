@@ -116,7 +116,6 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
     }
 }
 
-template <uint32_t T_TH, uint32_t T_TW>
 __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matrix
     const uint32_t n, const uint32_t m, // matrix size, block size
     const uint32_t j // block col
@@ -125,19 +124,18 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
 
     // Setup smem
     extern __shared__ float smem[];
-    float *smem2 = smem + m * m;
 
     // Chol (only first warp participates)
     const float *Ajj = block_cholesky_space::get_block(A, j, j, n, m);
-    float *Ljj = smem2;
+    float *Ljj = smem;
     cholesky_small::block_cholesky(Ajj, Ljj, n, m, m);
 
-    // Write back Ljj
+    // Write back Ljj (all threads participate)
     Ljj = block_cholesky_space::get_block(L, j, j, n, m);
     for (uint32_t idx = threadIdx.x; idx < m * m; idx += blockDim.x) {
         const uint32_t ti = idx / m;
         const uint32_t tj = idx % m;
-        Ljj[ti * n + tj] = smem2[idx];
+        Ljj[ti * n + tj] = smem[idx];
     }
 }
 
@@ -153,9 +151,9 @@ void launch_block_cholesky(
     // Setup smem
     constexpr int smem_size_bytes = m * m * 2 * sizeof(float); // need to store 2 blocks in smem
     cudaFuncSetAttribute(
-        chol_kernel<4, 4>,
+        chol_kernel,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
-        smem_size_bytes
+        smem_size_bytes/2
     );
     cudaFuncSetAttribute(
         block_kernel<4, 4>,
@@ -166,7 +164,7 @@ void launch_block_cholesky(
     // Iterate over block cols launching a kernel for each step
     for (uint32_t j = 0; j < n / m; ++j) {
         // Step 1: Chol diagonal block
-        chol_kernel<4, 4><<<1, 32, smem_size_bytes>>>(in, out, n, m, j);
+        chol_kernel<<<1, 32, smem_size_bytes/2>>>(in, out, n, m, j);
 
         // Step 2: Trsm then update
         block_kernel<4, 4><<<48, 8*32, smem_size_bytes>>>(const_cast<float*>(in), out, n, m, j);
