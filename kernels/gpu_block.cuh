@@ -88,25 +88,21 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
 
     // Each SM gets a block
     for (uint32_t i = j + 1 + blockIdx.x; i < n / m; i += gridDim.x) {
+        // TRSM
         float *Ljj = get_block(L, j, j, n, m);
         float *Aij = get_block(A, i, j, n, m);
         block_trsm(Ljj, smem, Aij, n, m, n, m); // A, X, B (Ljj * Lij^T = Aij^T)
 
-        // TRSM
-        // float *Ljj = get_block(L, j, j, n, m);
-        // float *Aij = get_block(A, i, j, n, m);
-        // block_trsm(Ljj, smem, Aij, n, m, n, m); // A, X, B (Ljj * Lij^T = Aij^T)
+        // Move L to Lij 
+        float *Lij = get_block(L, i, j, n, m);
 
-        // // Move L to Lij 
-        // float *Lij = get_block(L, i, j, n, m);
-
-        // // Write back Lij
-        // for (uint32_t idx = threadIdx.x; idx < m * m; idx += blockDim.x) {
-        //     const uint32_t ti = idx / m;
-        //     const uint32_t tj = idx % m;
-        //     Lij[ti * n + tj] = smem[idx];
-        // }
-        // __syncthreads();
+        // Write back Lij
+        for (uint32_t idx = threadIdx.x; idx < m * m; idx += blockDim.x) {
+            const uint32_t ti = idx / m;
+            const uint32_t tj = idx % m;
+            Lij[ti * n + tj] = smem[idx];
+        }
+        __syncthreads();
 
         // Update Aii
         block_update<T_TH, T_TW>(A, L, n, m, i, j, smem);
