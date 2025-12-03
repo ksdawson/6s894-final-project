@@ -1,5 +1,5 @@
-// TL+ {"compile_flags": ["-lcuda", "-lcublas"]}
-// TL+ {"header_files": ["utils.cuh", "cholesky.cuh", "trsm.cuh", "gpu_block_kernel_fusion.cuh", "cholesky_small.cuh", "trsm_small.cuh", "gpu_block_enhanced_kernel_fusion.cuh", "gtrsm.cuh"]}
+// TL+ {"compile_flags": ["-lcuda"]}
+// TL+ {"header_files": ["utils.cuh", "cholesky.cuh", "trsm.cuh", "gpu_block_kernel_fusion.cuh", "cholesky_small.cuh", "trsm_small.cuh", "gpu_block_enhanced_kernel_fusion.cuh"]}
 // TL+ {"workspace_files": []}
 #include <chrono>
 #include <cstdint>
@@ -15,8 +15,8 @@
 #include "utils.cuh"
 #include "cholesky_small.cuh"
 #include "trsm_small.cuh"
-#include "gtrsm.cuh"
 //#include "cholesky.cuh"
+#include "trsm.cuh"
 #include "gpu_block_kernel_fusion.cuh"
 #include "gpu_block_enhanced_kernel_fusion.cuh"
 
@@ -39,11 +39,8 @@
 // }
 
 enum class Phase {
-    CHOLESKY,
-    TRSM,
-    CHOLESKY_SMALL,
-    TRSM_SMALL,
-    ENHANCED_CHOLESKY
+    POTRF,
+    TRSM
 };
 
 struct BenchmarkResults {
@@ -481,7 +478,6 @@ int main(int argc, char **argv) {
 
     auto data_trsm = generate_test_data(configs, Phase::TRSM);
     run_all_impls(Phase::TRSM_SMALL, data_trsm, configs);
-    run_all_impls(Phase::TRSM, data_trsm, configs);
     //auto results = run_all_impls(Phase::BENCHMARK, data, configs);
 
     //can compute speedups later if needed -- XY
