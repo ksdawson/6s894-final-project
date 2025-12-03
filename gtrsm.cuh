@@ -10,12 +10,17 @@
 #include <stdio.h>
 #include <vector>
 
-#define CUDA_CHECK(err)                                                        \
-  if ((err) != cudaSuccess) {                                                  \
-    fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__,           \
-            cudaGetErrorString(err));                                          \
-    exit(EXIT_FAILURE);                                                        \
+namespace trsm_space {
+  size_t get_workspace_size(int32_t size) {
+    return 0;
   }
+
+// #define CUDA_CHECK(err)                                                        \
+//   if ((err) != cudaSuccess) {                                                  \
+//     fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__,           \
+//             cudaGetErrorString(err));                                          \
+//     exit(EXIT_FAILURE);                                                        \
+//   }
 
 #define CUBLAS_CHECK(err)                                                      \
   if ((err) != CUBLAS_STATUS_SUCCESS) {                                        \
@@ -241,6 +246,21 @@ void trsmGraphLaunch(uint32_t n, float *A_d, float *b_d, float *x_d,
   printf("Custom Graph TRSM Time: %.3f ms\n", milliseconds);
 }
 
+void launch_trsm(uint32_t n, float *A, float *x, float *b, void *workspace) {
+  constexpr uint32_t blocksize = 32;
+  uint32_t numblocks = n / blocksize;
+
+  cudaGraph_t graph;
+  CUDA_CHECK(cudaGraphCreate(&graph, 0));
+
+  buildTriangularSolverGraph<blocksize>(graph, numblocks, n, n, A, x, b);
+  cudaGraphExec_t graphExec;
+  CUDA_CHECK(cudaGraphInstantiate(&graphExec, graph, NULL, NULL, 0));
+  
+  cudaGraphExecDestroy(graphExec);
+  cudaGraphDestroy(graph);
+}
+
 void trsmCublasLaunch(cublasHandle_t handle, uint32_t n, float *A_d, float *b_d,
                       float *h_x_result) {
 
@@ -272,6 +292,7 @@ void trsmCublasLaunch(cublasHandle_t handle, uint32_t n, float *A_d, float *b_d,
 
   printf("cuBLAS TRSM Time:      %.3f ms\n", milliseconds);
 }
+
 
 void verify_result(int n, const std::vector<float> &x_result,
                    const std::vector<float> &x_true, const std::string &label) {
@@ -356,4 +377,5 @@ int main() {
   cudaFree(d_b_cublas);
 
   return 0;
+}
 }

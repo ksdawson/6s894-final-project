@@ -18,6 +18,11 @@ size_t get_workspace_size(int32_t size) {
     return 0;
 }
 
+void set_up_cusolver(cusolverDnHandle_t *cusolverH) {
+    cusolverDnHandle_t cusolverH = NULL;
+    cudaStream_t stream = NULL;
+    cusolverDnParams_t params = NULL;
+}
 
 
 void launch_potrf(int32_t size, float *a, float *c, float *b, void *workspace) {
