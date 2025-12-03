@@ -330,7 +330,7 @@ struct Cholesky {
         float *c,
         float const *b,
         void *workspace) {
-        block_cholesky_space::launch_block_cholesky(size, a, c, workspace);
+        block_cholesky_space::kernel_fusion::launch_block_cholesky(size, a, c, workspace);
     }
 };
 
