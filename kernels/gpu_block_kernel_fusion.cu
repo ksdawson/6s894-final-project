@@ -87,15 +87,10 @@ __global__ void block_kernel(const float *A, float *L, // input matrix, Chol mat
         // Update
         block_update<T_TH, T_TW>(A, L, n, m, i, j, smem);
 
-        // L blocks 
+        // TRSM
         float *Lij = L + i * m * n + j * m;
         float *Ljj = L + j * m * n + j * m;
-
-        // TRSM
-        float *A = Ljj;
-        float *X = Lij;
-        float *B = smem; // update output
-        block_trsm(A, X, B, n, m);
+        block_trsm(Ljj, Lij, smem, n, m); // A, X, B
     }
 }
 
@@ -107,7 +102,9 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
     block_update<T_TH, T_TW>(A, L, n, m, i, j, smem);
 
     // Chol
-    cholesky();
+    const float *Ajj = A + j * m * n + j * m;
+    float *Ljj = L + j * m * n + j * m;
+    block_cholesky(Ajj, Ljj, n, m);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -122,7 +119,7 @@ void launch_block_cholesky(
     // Iterate over block cols launching a kernel for each step
     for (uint32_t j = 0; j < n / m; ++j) {
         // Step 1: Chol(update) diagonal block
-        block_kernel<4, 4><<<1, 8*32>>>(in, out, n, m, j);
+        chol_kernel<4, 4><<<1, 8*32>>>(in, out, n, m, j);
 
         // Step 2: Trsm(update) all other blocks
         block_kernel<4, 4><<<48, 8*32>>>(in, out, n, m, j);
