@@ -1,5 +1,5 @@
 // TL+ {"compile_flags": ["-lcuda"]}
-// TL+ {"header_files": ["gpu_naive.cuh", "cpu.cuh", "utils.cuh", "trsm.cuh", "gpu_block_kernel_fusion.cuh"]}
+// TL+ {"header_files": ["gpu_naive.cuh", "cpu.cuh", "utils.cuh", "trsm.cuh", "gpu_block.cuh", "gpu_block_kernel_fusion.cuh"]}
 // TL {"workspace_files": []}
 
 #include <cstdint>
@@ -11,6 +11,7 @@
 #include "gpu_naive.cuh"
 #include "utils.cuh"
 #include "trsm.cuh"
+#include "gpu_block.cuh"
 #include "gpu_block_kernel_fusion.cuh"
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -408,15 +409,26 @@ int main(int argc, char **argv) {
     test_trsm(16);
     printf("\n");
 
-    printf("Testing GPU block\n");
+    printf("Testing GPU block w/ kernel fusion\n");
     printf("1x1 block Cholesky\n");
-    test_case_gpu(64, launch_block_cholesky);
+    test_case_gpu(64, kernel_fusion::launch_block_cholesky);
     printf("2x2 block Cholesky\n");
-    test_case_gpu(128, launch_block_cholesky);
+    test_case_gpu(128, kernel_fusion::launch_block_cholesky);
     printf("4x4 block Cholesky\n");
-    test_case_gpu(256, launch_block_cholesky);
+    test_case_gpu(256, kernel_fusion::launch_block_cholesky);
     printf("8x8 block Cholesky\n");
-    test_case_gpu(512, launch_block_cholesky);
+    test_case_gpu(512, kernel_fusion::launch_block_cholesky);
+    printf("\n");
+
+    printf("Testing GPU block w/o kernel fusion\n");
+    printf("1x1 block Cholesky\n");
+    test_case_gpu(64, default_chol::launch_block_cholesky);
+    printf("2x2 block Cholesky\n");
+    test_case_gpu(128, default_chol::launch_block_cholesky);
+    printf("4x4 block Cholesky\n");
+    test_case_gpu(256, default_chol::launch_block_cholesky);
+    printf("8x8 block Cholesky\n");
+    test_case_gpu(512, default_chol::launch_block_cholesky);
     printf("\n");
 
     return 0;

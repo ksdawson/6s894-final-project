@@ -84,18 +84,19 @@ __global__ void trsm_kernel(uint32_t n, const float *A, float *X,
 
 template <bool x_row, bool b_row>
 __device__ void block_forward_substitution(float const *A, float *x, float const *b,
-  const uint32_t n, const uint32_t m
+  const uint32_t A_n, const uint32_t x_n, const uint32_t b_n,
+  const uint32_t r
 ) {
   // Use local thread idx as this is done at the warp level
   const uint32_t thread_idx = threadIdx.x % 32;
-  for (uint32_t i = 0; i < m; ++i) {
+  for (uint32_t i = 0; i < r; ++i) {
     // Each thread computes a piece of the sum
     float partial_sum = 0.0f;
     for (uint32_t j = thread_idx; j < i; j += 32) {
       if constexpr (x_row)
-        partial_sum += A[i * n + j] * x[j];
+        partial_sum += A[i * A_n + j] * x[j];
       else
-        partial_sum += A[i * n + j] * x[j * n];
+        partial_sum += A[i * A_n + j] * x[j * x_n];
     }
     // Combine the sum across the warp
     float sum = utils::warp_prefix_sum<float>(partial_sum);
@@ -103,13 +104,13 @@ __device__ void block_forward_substitution(float const *A, float *x, float const
     if (thread_idx == 31) {
       float xi = 0.0f;
       if constexpr (b_row)
-        xi = (b[i] - sum) / A[i * n + i];
+        xi = (b[i] - sum) / A[i * A_n + i];
       else
-        xi = (b[i * m] - sum) / A[i * n + i];
+        xi = (b[i * b_n] - sum) / A[i * A_n + i];
       if constexpr (x_row)
         x[i] = xi;
       else
-        x[i * n] = xi;
+        x[i * x_n] = xi;
     }
     // All threads need this iteration to be done
     __syncwarp();
@@ -117,13 +118,14 @@ __device__ void block_forward_substitution(float const *A, float *x, float const
 }
 
 __device__ void block_trsm(float const *A, float *X, float const *B,
-  const uint32_t n, const uint32_t m
+  const uint32_t A_n, const uint32_t X_n, const uint32_t B_n,
+  const uint32_t r
 ) {
   // Done at the SM level
-  for (uint32_t i = threadIdx.x / 32; i < m; i += blockDim.x / 32) {
-    float *x = X + i * n; // row
-    float const *b = B + i * m; // row
-    block_forward_substitution<true, true>(A, x, b, n, m);
+  for (uint32_t i = threadIdx.x / 32; i < r; i += blockDim.x / 32) {
+    float *x = X + i * X_n; // row
+    float const *b = B + i * B_n; // row
+    block_forward_substitution<true, true>(A, x, b, A_n, X_n, B_n, r);
   }
 
   // Wait for everything to be done

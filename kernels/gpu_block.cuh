@@ -1,5 +1,5 @@
 // TL+ {"compile_flags": ["-lcuda"]}
-// TL+ {"header_files": ["trsm.cuh", "gpu_naive.cuh"]}
+// TL+ {"header_files": ["trsm.cuh", "gpu_naive.cuh", "gpu_block_kernel_fusion.cuh"]}
 // TL {"workspace_files": []}
 
 #pragma once
@@ -9,42 +9,25 @@
 #include <math.h>
 #include "trsm.cuh"
 #include "gpu_naive.cuh"
-
-////////////////////////////////////////////////////////////////////////////////
-// Helper functions
-
-__device__ float* get_block(float *A, const uint32_t i, const uint32_t j, const uint32_t n, const uint32_t m) { return A + i * m * n + j * m; }
-__device__ const float* get_block(const float *A, const uint32_t i, const uint32_t j, const uint32_t n, const uint32_t m) { return A + i * m * n + j * m; }
+#include "gpu_block_kernel_fusion.cuh"
 
 ////////////////////////////////////////////////////////////////////////////////
 // Device functions
 
-struct BlockUpdate {
-    const float *A; // input matrix
-    float *L; // Chol matrix
-    const uint32_t n; // matrix size
-    const uint32_t m; // block size
-    const uint32_t i; // Lik * Ljk^T
-    const uint32_t j;
-    float *reg; // add result to reg
-    float *smem; // use for read-only data reuse
-};
-
-namespace kernel_fusion {
+namespace default_chol {
 
 template <uint32_t T_TH, uint32_t T_TW>
-__device__ void block_gemm_naive(BlockUpdate input, const uint32_t k) {
+__device__ void block_gemm_naive(BlockUpdate input) {
     auto [A, L, n, m, i, j, reg, smem] = input;
 
-    // Matrices to multiply
-    float *Lik = get_block(L, i, k, n, m);
-    float *Ljk = get_block(L, j, k, n, m);
+    // Matrix to multiply
+    float *Lij = smem;
 
     // Move to subtile
     const uint32_t tile_i = threadIdx.x / (m / T_TW);
     const uint32_t tile_j = threadIdx.x % (m / T_TW);
-    float *_Lik = Lik + tile_i * T_TH * n;
-    float *_Ljk = Ljk + tile_j * T_TH * n;
+    float *_Lij_row = Lij + tile_i * T_TH * m;
+    float *_Lij_col = Lij + tile_j * T_TH * m;
 
     // Each thread handles a tile
     #pragma unroll
@@ -52,7 +35,7 @@ __device__ void block_gemm_naive(BlockUpdate input, const uint32_t k) {
         #pragma unroll
         for (uint32_t tj = 0; tj < T_TW; ++tj) {
             for (uint32_t tk = 0; tk < m; ++tk) {
-                reg[ti * T_TW + tj] += _Lik[ti * n + tk] * _Ljk[tj * n + tk];
+                reg[ti * T_TW + tj] += _Lij_row[ti * m + tk] * _Lij_col[tj * m + tk];
             }
         }
     }
@@ -62,7 +45,7 @@ __device__ void block_gemm_naive(BlockUpdate input, const uint32_t k) {
 }
 
 template <uint32_t T_TH, uint32_t T_TW>
-__device__ void block_update(const float *A, float *L,
+__device__ void block_update(float *A, float *L,
     const uint32_t n, const uint32_t m,
     const uint32_t i, const uint32_t j,
     float *smem
@@ -70,27 +53,24 @@ __device__ void block_update(const float *A, float *L,
     // Accumulate update results in registers w/ each thread getting a subtile
     float reg[T_TH * T_TW] = {0.0f}; // zero-init
 
-    // Sum Lik * Ljk^T
+    // Compute Lij * Lij^T
     BlockUpdate input = {A, L, n, m, i, j, reg, smem};
-    for (uint32_t k = 0; k < j; ++k) {
-        block_gemm_naive<T_TH, T_TW>(input, k);
-    }
+    block_gemm_naive<T_TH, T_TW>(input);
 
-    // Move A to Aij 
-    const float *Aij = get_block(A, i, j, n, m);
+    // Move A to Aii
+    float *Aii = get_block(A, i, i, n, m);
 
     // Move to subtile
     const uint32_t tile_i = threadIdx.x / (m / T_TW);
     const uint32_t tile_j = threadIdx.x % (m / T_TW);
-    const float *_Aij = Aij + tile_i * T_TH * n + tile_j * T_TW;
-    float *_Aij_p = smem + tile_i * T_TH * m + tile_j * T_TW;
+    float *_Aii = Aii + tile_i * T_TH * n + tile_j * T_TW;
 
-    // Compute Aij - sum
+    // Compute Aii - Lij * Lij^T
     #pragma unroll
     for (uint32_t ti = 0; ti < T_TH; ++ti) {
         #pragma unroll
         for (uint32_t tj = 0; tj < T_TW; ++tj) {
-            _Aij_p[ti * m + tj] = _Aij[ti * n + tj] - reg[ti * T_TW + tj];
+            _Aii[ti * n + tj] -= reg[ti * T_TW + tj];
         }
     }
 
@@ -99,7 +79,7 @@ __device__ void block_update(const float *A, float *L,
 }
 
 template <uint32_t T_TH, uint32_t T_TW>
-__global__ void block_kernel(const float *A, float *L, // input matrix, Chol matrix
+__global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
     const uint32_t n, const uint32_t m, // matrix size, block size
     const uint32_t j // block col
 ) {
@@ -108,14 +88,28 @@ __global__ void block_kernel(const float *A, float *L, // input matrix, Chol mat
 
     // Each SM gets a block
     for (uint32_t i = j + 1 + blockIdx.x; i < n / m; i += gridDim.x) {
-        // Update
-        block_update<T_TH, T_TW>(A, L, n, m, i, j, smem);
+        float *Ljj = get_block(L, j, j, n, m);
+        float *Aij = get_block(A, i, j, n, m);
+        block_trsm(Ljj, smem, Aij, n, m, n, m); // A, X, B (Ljj * Lij^T = Aij^T)
 
         // TRSM
-        float *Lij = get_block(L, i, j, n, m);
-        float *Ljj = get_block(L, j, j, n, m);
-        float *Aij = smem;
-        block_trsm(Ljj, Lij, Aij, n, n, m, m); // A, X, B
+        // float *Ljj = get_block(L, j, j, n, m);
+        // float *Aij = get_block(A, i, j, n, m);
+        // block_trsm(Ljj, smem, Aij, n, m, n, m); // A, X, B (Ljj * Lij^T = Aij^T)
+
+        // // Move L to Lij 
+        // float *Lij = get_block(L, i, j, n, m);
+
+        // // Write back Lij
+        // for (uint32_t idx = threadIdx.x; idx < m * m; idx += blockDim.x) {
+        //     const uint32_t ti = idx / m;
+        //     const uint32_t tj = idx % m;
+        //     Lij[ti * n + tj] = smem[idx];
+        // }
+        // __syncthreads();
+
+        // Update Aii
+        block_update<T_TH, T_TW>(A, L, n, m, i, j, smem);
     }
 }
 
@@ -126,16 +120,10 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
 ) {
     // Only 1 SM participates
 
-    // Setup smem
-    extern __shared__ float smem[];
-
-    // Update (all threads participate)
-    block_update<T_TH, T_TW>(A, L, n, m, j, j, smem);
-
     // Chol (only first warp participates)
-    float *Ajj = smem;
+    const float *Ajj = get_block(A, j, j, n, m);
     float *Ljj = get_block(L, j, j, n, m);
-    block_cholesky(Ajj, Ljj, m, n, m);
+    block_cholesky(Ajj, Ljj, n, n, m);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -150,11 +138,6 @@ void launch_block_cholesky(
     // Setup smem
     constexpr int smem_size_bytes = m * m * 2 * sizeof(float); // need to store 2 blocks in smem
     cudaFuncSetAttribute(
-        chol_kernel<4, 4>,
-        cudaFuncAttributeMaxDynamicSharedMemorySize,
-        smem_size_bytes
-    );
-    cudaFuncSetAttribute(
         block_kernel<4, 4>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
         smem_size_bytes
@@ -162,12 +145,12 @@ void launch_block_cholesky(
 
     // Iterate over block cols launching a kernel for each step
     for (uint32_t j = 0; j < n / m; ++j) {
-        // Step 1: Chol(update) diagonal block
-        chol_kernel<4, 4><<<1, 8*32, smem_size_bytes>>>(in, out, n, m, j);
+        // Step 1: Chol diagonal block
+        chol_kernel<4, 4><<<1, 32>>>(in, out, n, m, j);
 
-        // Step 2: Trsm(update) all other blocks
-        block_kernel<4, 4><<<48, 8*32, smem_size_bytes>>>(in, out, n, m, j);
+        // Step 2: Trsm then update
+        block_kernel<4, 4><<<48, 8*32, smem_size_bytes>>>(const_cast<float*>(in), out, n, m, j);
     }
 }
 
-} // namespace kernel_fusion
+} // namespace default_chol
