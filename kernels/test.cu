@@ -1,5 +1,5 @@
 // TL+ {"compile_flags": ["-lcuda"]}
-// TL+ {"header_files": ["gpu_naive.cuh", "cpu.cuh", "utils.cuh"]}
+// TL+ {"header_files": ["gpu_naive.cuh", "cpu.cuh", "utils.cuh", "trsm.cuh"]}
 // TL {"workspace_files": []}
 
 #include <cstdint>
@@ -10,6 +10,7 @@
 #include "cpu.cuh"
 #include "gpu_naive.cuh"
 #include "utils.cuh"
+#include "trsm.cuh"
 
 ////////////////////////////////////////////////////////////////////////////////
 // Cholesky test harness
@@ -229,11 +230,179 @@ void test_case_gpu(uint32_t N) {
 ////////////////////////////////////////////////////////////////////////////////
 // TRSM test harness
 
+void generate_lower_triangular(uint32_t N, float *A) {
+  for (uint32_t i = 0; i < N; ++i) {
+    for (uint32_t j = 0; j < N; ++j) {
+      if (j <= i) {
+        A[i * N + j] = (float)(rand() % 9 + 1); // positive
+      } else {
+        A[i * N + j] = 0.0f;
+      }
+    }
+  }
+}
+
+void test_forward_substitution(uint32_t N) {
+  printf("Testing forward substitution with N=%u\n", N);
+
+  float *A = (float *)malloc(N * N * sizeof(float));
+  float *x_true = (float *)malloc(N * sizeof(float));
+  float *b = (float *)malloc(N * sizeof(float));
+  float *x_gpu = (float *)malloc(N * sizeof(float));
+
+  generate_lower_triangular(N, A);
+
+  // Generate random true solution
+  for (uint32_t i = 0; i < N; ++i) {
+    x_true[i] = (float)(rand() % 10 + 1);
+  }
+
+  // Compute b = A * x_true
+  for (uint32_t i = 0; i < N; ++i) {
+    float sum = 0.0f;
+    for (uint32_t j = 0; j <= i; ++j) {
+      sum += A[i * N + j] * x_true[j];
+    }
+    b[i] = sum;
+  }
+
+  // Allocate device memory
+  float *A_d, *b_d, *x_d;
+  CUDA_CHECK(cudaMalloc(&A_d, N * N * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&b_d, N * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&x_d, N * sizeof(float)));
+
+  CUDA_CHECK(cudaMemcpy(A_d, A, N * N * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(b_d, b, N * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemset(x_d, 0, N * sizeof(float)));
+
+  // Launch with one warp (since function assumes warp-level sum)
+  forward_substitution_kernel<<<1, 32>>>(N, A_d, x_d, b_d);
+  CUDA_CHECK(cudaDeviceSynchronize());
+
+  CUDA_CHECK(cudaMemcpy(x_gpu, x_d, N * sizeof(float), cudaMemcpyDeviceToHost));
+
+  // Verify results
+  bool failed = false;
+  float tol = 1e-3f;
+  for (uint32_t i = 0; i < N; ++i) {
+    if (fabsf(x_gpu[i] - x_true[i]) > tol) {
+      printf("Mismatch at %u: got %.5f, expected %.5f\n", i, x_gpu[i],
+             x_true[i]);
+      failed = true;
+    }
+  }
+
+  if (!failed)
+    printf("Test PASSED for N=%u\n", N);
+  else
+    printf("Test FAILED for N=%u\n", N);
+
+  free(A);
+  free(x_true);
+  free(b);
+  free(x_gpu);
+  CUDA_CHECK(cudaFree(A_d));
+  CUDA_CHECK(cudaFree(b_d));
+  CUDA_CHECK(cudaFree(x_d));
+}
+
+void test_trsm(uint32_t N) {
+  printf("Testing trsm with N=%u\n", N);
+
+  float *L = (float *)malloc(N * N * sizeof(float));
+  float *X_true = (float *)malloc(N * N * sizeof(float));
+  float *B = (float *)malloc(N * N * sizeof(float));
+  float *X_gpu = (float *)malloc(N * N * sizeof(float));
+
+  generate_lower_triangular(N, L);
+
+  // Generate random true solution
+  for (uint32_t i = 0; i < N * N; ++i) {
+    X_true[i] = (float)(rand() % 10 + 1);
+  }
+
+  // Compute B = X_true * L^T (since trsm solves L * X^T = B, so B = X_true *
+  // L^T) Alternatively, if trsm is solving row-wise L*x = b, then B = X_true *
+  // L^T still fits.
+  for (uint32_t i = 0; i < N; ++i) {
+    for (uint32_t j = 0; j < N; ++j) {
+      float sum = 0.0f;
+      for (uint32_t k = 0; k < N; ++k) {
+        sum += X_true[i * N + k] * L[j * N + k]; // row-wise L^T multiply
+      }
+      B[j * N + i] = sum;
+    }
+  }
+
+  // Allocate device memory
+  float *L_d, *B_d, *X_d;
+  CUDA_CHECK(cudaMalloc(&L_d, N * N * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&B_d, N * N * sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&X_d, N * N * sizeof(float)));
+
+  CUDA_CHECK(cudaMemcpy(L_d, L, N * N * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(B_d, B, N * N * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemset(X_d, 0, N * N * sizeof(float)));
+
+  // Launch kernel (1 block, multiple warps)
+  trsm_kernel<<<1, 32 * 32>>>(N, L_d, X_d, B_d);
+  CUDA_CHECK(cudaDeviceSynchronize());
+
+  CUDA_CHECK(
+      cudaMemcpy(X_gpu, X_d, N * N * sizeof(float), cudaMemcpyDeviceToHost));
+
+  // Verify results
+  bool failed = false;
+  float tol = 1e-3f;
+  for (uint32_t i = 0; i < N * N; ++i) {
+    if (fabsf(X_gpu[i] - X_true[i]) > tol) {
+      printf("Mismatch at (%u): got %.5f, expected %.5f\n", i, X_gpu[i],
+             X_true[i]);
+      failed = true;
+    }
+  }
+
+  if (!failed) {
+    printf("Test PASSED for N=%u\n", N);
+  } else {
+    printf("Test FAILED for N=%u\n", N);
+  }
+
+  free(L);
+  free(B);
+  free(X_true);
+  free(X_gpu);
+  CUDA_CHECK(cudaFree(L_d));
+  CUDA_CHECK(cudaFree(B_d));
+  CUDA_CHECK(cudaFree(X_d));
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Entry point
+
 int main(int argc, char **argv) {
     printf("Testing CPU naive\n");
     test_case_3x3_cpu();
+    printf("\n");
 
     printf("Testing GPU naive\n");
     test_case_3x3_gpu();
     test_case_gpu(50);
+    printf("\n");
+
+    printf("Testing TRSM naive\n");
+    srand(0);
+    // Test forward substitution
+    test_forward_substitution(4);
+    test_forward_substitution(8);
+    test_forward_substitution(16);
+    test_forward_substitution(1024);
+    // Test trsm
+    test_trsm(2);
+    test_trsm(4);
+    test_trsm(8);
+    test_trsm(16);
+
+    return 0;
 }
