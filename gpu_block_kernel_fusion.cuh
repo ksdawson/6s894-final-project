@@ -112,6 +112,45 @@ struct BlockUpdate {
 };
 
 template <uint32_t T_TH, uint32_t T_TW>
+__device__ void diagonal_block_gemm_naive(float *A, float* C,
+    const uint A_n, const uint32_t r,
+    const uint32_t tile_i, const uint32_t tile_j
+) {
+    // Move to subtile
+    float *_A = A + tile_i * T_TH * A_n;
+    float *_B = A + tile_j * T_TH * A_n;
+
+    // Each thread handles a tile
+    for (uint32_t tk = 0; tk < r; tk += 4) {
+        #pragma unroll
+        for (uint32_t ti = 0; ti < T_TH; ++ti) {
+            const float4 a = *(reinterpret_cast<float4*>(_A + ti * A_n + tk));
+            #pragma unroll
+            for (uint32_t tj = 0; tj < (tile_i == tile_j ? ti+1 : T_TW); ++tj) {
+                if ((_A + ti * A_n + tk) == (_B + tj * A_n + tk)) {
+                    // If i==j reuse a
+                    C[ti * T_TW + tj] += (a.x * a.x + a.y * a.y + a.z * a.z + a.w * a.w);
+                    continue;
+                }
+                const float4 b = *(reinterpret_cast<float4*>(_B + tj * A_n + tk));
+                C[ti * T_TW + tj] += (a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w);
+            }
+        }
+    }
+    // Handle tail
+    for (uint32_t tk = (r / 4) * 4; tk < r; ++tk) {
+        #pragma unroll
+        for (uint32_t ti = 0; ti < T_TH; ++ti) {
+            const float a = _A[ti * A_n + tk];
+            #pragma unroll
+            for (uint32_t tj = 0; tj < (tile_i == tile_j ? ti+1 : T_TW); ++tj) {
+                C[ti * T_TW + tj] += a * _B[tj * A_n + tk];
+            }
+        }
+    }
+}
+
+template <uint32_t T_TH, uint32_t T_TW>
 __device__ void block_gemm_naive(float *A, float *B, float* C,
     const uint32_t A_n, const uint32_t B_n, const uint32_t r
 ) {
@@ -191,6 +230,57 @@ __device__ void block_update(const float *A, float *L,
 }
 
 template <uint32_t T_TH, uint32_t T_TW>
+__device__ void diagonal_block_update(const float *A, float *L,
+    const uint32_t n, const uint32_t m,
+    const uint32_t i, const uint32_t j,
+    float *smem
+) {
+    // Accumulate update results in registers w/ each thread getting a subtile
+    float reg[T_TH * T_TW] = {0.0f}; // zero-init
+    
+    // Map rectangular to triangular tiles
+    const uint32_t tile_i = (uint32_t)((sqrtf(8.f * threadIdx.x + 1.f) - 1.f) * 0.5f);
+    const uint32_t tile_j = threadIdx.x - (tile_i * (tile_i + 1) / 2);
+
+    // Only compute if valid tile
+    const uint32_t N = m / T_TH;
+
+    // Sum Lik * Lik^T
+    for (uint32_t k = 0; k < j; ++k) {
+        // Load Lik into smem
+        float *Lik = get_block(L, i, k, n, m);
+        gmem_to_smem(Lik, smem, n, m);
+
+        if (tile_i < N && tile_j < N) {
+            diagonal_block_gemm_naive<T_TH, T_TW>(smem, reg, m, m, tile_i, tile_j);
+        }
+
+        __syncthreads();
+    }
+
+    if (tile_i < N && tile_j < N) {
+        // Move A to Aii
+        const float *Aii = get_block(A, i, i, n, m);
+
+        // Move to subtile
+        const float *_Aii = Aii + tile_i * T_TH * n + tile_j * T_TW;
+        float *_Aii_p = smem + tile_i * T_TH * m + tile_j * T_TW;
+
+        // Compute Aii - sum
+        #pragma unroll
+        for (uint32_t ti = 0; ti < T_TH; ++ti) {
+            #pragma unroll
+            for (uint32_t tj = 0; tj < (tile_i == tile_j ? ti+1 : T_TW); ++tj) {
+                _Aii_p[ti * m + tj] = _Aii[ti * n + tj] - reg[ti * T_TW + tj];
+            }
+        }
+    }
+
+    // Wait for the entire block to finish
+    __syncthreads();
+}
+
+template <uint32_t T_TH, uint32_t T_TW>
 __launch_bounds__(1024)
 __global__ void block_kernel(const float *A, float *L, // input matrix, Chol matrix
     const uint32_t n, const uint32_t m, // matrix size, block size
@@ -226,6 +316,7 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
     float *smem2 = smem + m * m;
 
     // Update (all threads participate)
+    // diagonal_block_update<T_TH, T_TW>(A, L, n, m, j, j, smem);
     block_update<T_TH, T_TW>(A, L, n, m, j, j, smem, smem2);
 
     // Chol (only first warp participates)

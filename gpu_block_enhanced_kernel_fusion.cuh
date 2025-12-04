@@ -21,49 +21,6 @@ size_t get_workspace_size(int32_t size) {
 }
 
 template <uint32_t T_TH, uint32_t T_TW>
-__device__ void diagonal_block_gemm_naive(float *A, float* C,
-    const uint A_n, const uint32_t r,
-    const uint32_t tile_i, const uint32_t tile_j
-) {
-    // TODO: AA^T is symmetric so only need to compute lower triangle
-
-    // Move to subtile
-    // const uint32_t tile_i = threadIdx.x / (r / T_TW);
-    // const uint32_t tile_j = threadIdx.x % (r / T_TW);
-    float *_A = A + tile_i * T_TH * A_n;
-    float *_B = A + tile_j * T_TH * A_n;
-
-    // Each thread handles a tile
-    for (uint32_t tk = 0; tk < r; tk += 4) {
-        #pragma unroll
-        for (uint32_t ti = 0; ti < T_TH; ++ti) {
-            const float4 a = *(reinterpret_cast<float4*>(_A + ti * A_n + tk));
-            #pragma unroll
-            for (uint32_t tj = 0; tj < (tile_i == tile_j ? ti+1 : T_TW); ++tj) {
-                if ((_A + ti * A_n + tk) == (_B + tj * A_n + tk)) {
-                    // If i==j reuse a
-                    C[ti * T_TW + tj] += (a.x * a.x + a.y * a.y + a.z * a.z + a.w * a.w);
-                    continue;
-                }
-                const float4 b = *(reinterpret_cast<float4*>(_B + tj * A_n + tk));
-                C[ti * T_TW + tj] += (a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w);
-            }
-        }
-    }
-    // Handle tail
-    for (uint32_t tk = (r / 4) * 4; tk < r; ++tk) {
-        #pragma unroll
-        for (uint32_t ti = 0; ti < T_TH; ++ti) {
-            const float a = _A[ti * A_n + tk];
-            #pragma unroll
-            for (uint32_t tj = 0; tj < (tile_i == tile_j ? ti+1 : T_TW); ++tj) {
-                C[ti * T_TW + tj] += a * _B[tj * A_n + tk];
-            }
-        }
-    }
-}
-
-template <uint32_t T_TH, uint32_t T_TW>
 __device__ void diagonal_block_update(float *A, float *L,
     const uint32_t n, const uint32_t m,
     const uint32_t i, const uint32_t j,
@@ -80,7 +37,7 @@ __device__ void diagonal_block_update(float *A, float *L,
     const uint32_t N = m / T_TH;
     if (tile_i < N && tile_j < N) {
         // Compute Lij * Lij^T
-        diagonal_block_gemm_naive<T_TH, T_TW>(smem, reg, m, m, tile_i, tile_j);
+        block_cholesky_space::diagonal_block_gemm_naive<T_TH, T_TW>(smem, reg, m, m, tile_i, tile_j);
 
         // Move A to Aii
         float *Aii = block_cholesky_space::get_block(A, i, i, n, m);
