@@ -21,25 +21,22 @@ size_t get_workspace_size(int32_t size) {
 }
 
 template <uint32_t T_TH, uint32_t T_TW>
-__device__ void diagonal_block_gemm_naive(block_cholesky_space::BlockUpdate input) {
-    auto [A, L, n, m, i, j, reg, smem] = input;
-
-    // Matrix to multiply
-    float *Lij = smem;
-
+__device__ void diagonal_block_gemm_naive(float *A, float* C,
+    const uint A_n, const uint32_t r
+) {
     // Move to subtile
-    const uint32_t tile_i = threadIdx.x / (m / T_TW);
-    const uint32_t tile_j = threadIdx.x % (m / T_TW);
-    float *_Lij_row = Lij + tile_i * T_TH * m;
-    float *_Lij_col = Lij + tile_j * T_TH * m;
+    const uint32_t tile_i = threadIdx.x / (r / T_TW);
+    const uint32_t tile_j = threadIdx.x % (r / T_TW);
+    float *_A = A + tile_i * T_TH * A_n;
+    float *_B = A + tile_j * T_TH * A_n;
 
     // Each thread handles a tile
     #pragma unroll
     for (uint32_t ti = 0; ti < T_TH; ++ti) {
         #pragma unroll
         for (uint32_t tj = 0; tj < T_TW; ++tj) {
-            for (uint32_t tk = 0; tk < m; ++tk) {
-                reg[ti * T_TW + tj] += _Lij_row[ti * m + tk] * _Lij_col[tj * m + tk];
+            for (uint32_t tk = 0; tk < r; ++tk) {
+                C[ti * T_TW + tj] += _A[ti * A_n + tk] * _B[tj * A_n + tk];
             }
         }
     }
@@ -58,8 +55,7 @@ __device__ void diagonal_block_update(float *A, float *L,
     float reg[T_TH * T_TW] = {0.0f}; // zero-init
 
     // Compute Lij * Lij^T
-    block_cholesky_space::BlockUpdate input = {A, L, n, m, i, j, reg, smem};
-    diagonal_block_gemm_naive<T_TH, T_TW>(input);
+    diagonal_block_gemm_naive<T_TH, T_TW>(smem, reg, m, m);
 
     // Move A to Aii
     float *Aii = block_cholesky_space::get_block(A, i, i, n, m);
