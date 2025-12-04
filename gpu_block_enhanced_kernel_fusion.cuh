@@ -99,7 +99,7 @@ __device__ void diagonal_block_update(float *A, float *L,
 }
 
 template <uint32_t T_TH, uint32_t T_TW>
-__launch_bounds__(256)
+__launch_bounds__(1024)
 __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
     const uint32_t n, const uint32_t m, // matrix size, block size
     const uint32_t j // block col
@@ -170,7 +170,7 @@ void launch_block_cholesky(
         smem_size_bytes
     );
     cudaFuncSetAttribute(
-        block_kernel<4, 4>,
+        block_kernel<2, 2>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
         smem_size_bytes * 3 // need to store 3 blocks in smem
     );
@@ -181,7 +181,7 @@ void launch_block_cholesky(
         chol_kernel<<<1, 32*32, smem_size_bytes>>>(in, out, n, m, j);
 
         // Step 2: Trsm then update
-        block_kernel<4, 4><<<48, 8*32, smem_size_bytes*3>>>(const_cast<float*>(in), out, n, m, j);
+        block_kernel<2, 2><<<48, 32*32, smem_size_bytes*3>>>(const_cast<float*>(in), out, n, m, j);
     }
 }
 
