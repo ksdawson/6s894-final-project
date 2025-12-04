@@ -43,7 +43,8 @@ enum class Phase {
     TRSM,
     CHOLESKY_SMALL,
     TRSM_SMALL,
-    ENHANCED_CHOLESKY
+    ENHANCED_CHOLESKY,
+    CUDA
 };
 
 struct BenchmarkResults {
@@ -330,7 +331,7 @@ struct Cholesky {
     run(int32_t size,
         float const *a,
         float *c,
-        float const *b,
+        float *b,
         void *workspace) {
         block_cholesky_space::launch_block_cholesky(size, a, c, workspace);
     }
@@ -347,7 +348,7 @@ struct Trsm {
     run(int32_t size,
         float const *a,
         float *c,
-        float const *b,
+        float *b,
         void *workspace) {
         trsm_space::launch_trsm(size, a, c, b, workspace);
     }
@@ -364,7 +365,7 @@ struct CholeskySmall {
     run(int32_t size,
         float const *a,
         float *c,
-        float const *b,
+        float *b,
         void *workspace) {
         cholesky_small::launch_cholesky(size, a, c, workspace);
     }
@@ -381,7 +382,7 @@ struct TrsmSmall {
     run(int32_t size,
         float const *a,
         float *c,
-        float const *b,
+        float *b,
         void *workspace) {
         trsm_small::launch_trsm(size, a, c, b, workspace);
     }
@@ -398,7 +399,7 @@ struct CholeskyEnhanced {
     run(int32_t size,
         float const *a,
         float *c,
-        float const *b,
+        float *b,
         void *workspace) {
         alt_kernel_fusion::launch_block_cholesky(size, a, c, workspace);
     }
@@ -481,7 +482,7 @@ int main(int argc, char **argv) {
 
     auto data_trsm = generate_test_data(configs, Phase::TRSM);
     run_all_impls(Phase::TRSM_SMALL, data_trsm, configs);
-    run_all_impls(Phase::TRSM, data_trsm, configs);
+    //run_all_impls(Phase::TRSM, data_trsm, configs);
     //auto results = run_all_impls(Phase::BENCHMARK, data, configs);
 
     //can compute speedups later if needed -- XY
