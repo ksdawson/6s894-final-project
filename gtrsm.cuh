@@ -259,7 +259,7 @@ void launch_trsm(uint32_t n, const float *A, float *x, float *b,
   buildTriangularSolverGraph<blocksize>(graph, numblocks, n, n, A, x, b);
   cudaGraphExec_t graphExec;
   CUDA_CHECK(cudaGraphInstantiate(&graphExec, graph, NULL, NULL, 0));
-
+  CUDA_CHECK(cudaGraphLaunch(graphExec, 0));
   cudaGraphExecDestroy(graphExec);
   cudaGraphDestroy(graph);
 }
