@@ -208,8 +208,8 @@ void buildTriangularSolverGraph(cudaGraph_t &graph, int num_blocks,
   }
 }
 
-void trsmGraphLaunch(uint32_t n, float const *A_d, float *b_d, float *x_d,
-                     float *h_x_result) {
+void trsmGraphLaunch(uint32_t n, uint32_t k, float const *A_d, float *b_d,
+                     float *x_d, float *h_x_result) {
 
   constexpr uint32_t blocksize = 32;
   uint32_t numblocks = n / blocksize;
@@ -217,7 +217,7 @@ void trsmGraphLaunch(uint32_t n, float const *A_d, float *b_d, float *x_d,
   cudaGraph_t graph;
   CUDA_CHECK(cudaGraphCreate(&graph, 0));
 
-  buildTriangularSolverGraph<blocksize>(graph, numblocks, n, 1, A_d, x_d, b_d);
+  buildTriangularSolverGraph<blocksize>(graph, numblocks, n, k, A_d, x_d, b_d);
 
   cudaGraphExec_t graphExec;
   CUDA_CHECK(cudaGraphInstantiate(&graphExec, graph, NULL, NULL, 0));
@@ -249,8 +249,9 @@ void trsmGraphLaunch(uint32_t n, float const *A_d, float *b_d, float *x_d,
   printf("Custom Graph TRSM Time: %.3f ms\n", milliseconds);
 }
 
-void trsmCublasLaunch(cublasHandle_t handle, uint32_t n, float *A_d, float *b_d,
-                      float *h_x_result) {
+void trsmCublasLaunch(cublasHandle_t handle, uint32_t n, uint32_t k, float *A_d,
+
+                      float *b_d, float *h_x_result) {
 
   float alpha = 1.0f;
 
@@ -261,7 +262,7 @@ void trsmCublasLaunch(cublasHandle_t handle, uint32_t n, float *A_d, float *b_d,
   cudaEventRecord(start, 0);
 
   CUBLAS_CHECK(cublasStrsm(handle, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER,
-                           CUBLAS_OP_N, CUBLAS_DIAG_NON_UNIT, n, 1, &alpha, A_d,
+                           CUBLAS_OP_N, CUBLAS_DIAG_NON_UNIT, n, k, &alpha, A_d,
                            n, b_d, n));
 
   cudaEventRecord(stop, 0);
@@ -281,22 +282,29 @@ void trsmCublasLaunch(cublasHandle_t handle, uint32_t n, float *A_d, float *b_d,
   printf("cuBLAS TRSM Time:      %.3f ms\n", milliseconds);
 }
 
-void verify_result(int n, const std::vector<float> &x_result,
-                   const std::vector<float> &x_true, const std::string &label) {
+void flush_gpu() {
+  void *flush_gpu = nullptr;
+  CUDA_CHECK(cudaMalloc(&flush_gpu, 1024 * 1024 * 64));
+  CUDA_CHECK(cudaMemset(flush_gpu, 1, 1024 * 1024 * 64));
+}
+
+void verify_result(int N, int K, const std::vector<float> &X,
+                   const std::vector<float> &X_true, const std::string &label) {
   float max_err = 0.0f;
-  for (int i = 0; i < n; ++i) {
-    float err = std::abs(x_true[i] - x_result[i]);
-    if (err > max_err)
-      max_err = err;
-  }
-  printf("Validation (%s): Max Error = %.6f. %s\n", label.c_str(), max_err,
-         (max_err < 1e-4) ? "PASSED" : "FAILED");
+
+  for (int col = 0; col < K; ++col)
+    for (int i = 0; i < N; ++i)
+      max_err =
+          std::max(max_err, std::abs(X[col * N + i] - X_true[col * N + i]));
+
+  std::cout << label << " max error = " << max_err << "\n";
 }
 
 int main() {
   const int BLOCK_SIZE = 32;
-  const int NUM_BLOCKS = 16;
-  const int N = BLOCK_SIZE * NUM_BLOCKS; // N = 512
+  const int NUM_BLOCKS = 32;
+  const int N = BLOCK_SIZE * NUM_BLOCKS;
+  const int K = 2;
 
   std::cout << "--- TRSM Comparison (Graph vs. cuBLAS) ---\n";
   std::cout << "Matrix Size: " << N << "x" << N << std::endl;
@@ -304,64 +312,70 @@ int main() {
 
   // 2. Host Setup
   std::vector<float> h_A(N * N);
-  std::vector<float> h_b_original(N); // Original RHS
-  std::vector<float> h_x_true(N);
-
-  // Results
-  std::vector<float> h_x_graph(N);
-  std::vector<float> h_x_cublas(N);
+  std::vector<float> h_B_original(N * K);
+  std::vector<float> h_X_true(N * K);   // true solution
+  std::vector<float> h_X_graph(N * K);  // graph result
+  std::vector<float> h_X_cublas(N * K); // cublas result
 
   std::default_random_engine gen(42);
   std::uniform_real_distribution<float> dist(0.1f, 1.0f);
 
   for (int i = 0; i < N; ++i) {
-    h_x_true[i] = dist(gen);
     for (int j = 0; j <= i; ++j) {
       h_A[i * N + j] = dist(gen);
       if (i == j)
-        h_A[i * N + j] += 2.0f; // Ensure diagonal dominance for stability
+        h_A[i * N + j] += 2.0f;
     }
   }
 
-  for (int i = 0; i < N; ++i) {
-    float sum = 0.0f;
-    for (int j = 0; j <= i; ++j) {
-      sum += h_A[i * N + j] * h_x_true[j];
+  for (int col = 0; col < K; ++col) {
+    for (int i = 0; i < N; ++i) {
+      h_X_true[col * N + i] = dist(gen);
+
+      float sum = 0.0f;
+      for (int j = 0; j <= i; ++j)
+        sum += h_A[i * N + j] * h_X_true[col * N + j];
+
+      h_B_original[col * N + i] = sum;
     }
-    h_b_original[i] = sum;
   }
 
-  float *d_A, *d_x_graph, *d_b_graph, *d_b_cublas;
+  flush_gpu();
+
+  float *d_A, *d_X_graph, *d_B_graph, *d_B_cublas;
 
   CUDA_CHECK(cudaMalloc(&d_A, N * N * sizeof(float)));
   CUDA_CHECK(cudaMemcpy(d_A, h_A.data(), N * N * sizeof(float),
                         cudaMemcpyHostToDevice));
 
-  CUDA_CHECK(cudaMalloc(&d_x_graph, N * sizeof(float)));
-  CUDA_CHECK(cudaMalloc(&d_b_graph, N * sizeof(float)));
-
-  CUDA_CHECK(cudaMalloc(&d_b_cublas, N * sizeof(float)));
+  cudaMalloc(&d_X_graph, N * K * sizeof(float));
+  cudaMalloc(&d_B_graph, N * K * sizeof(float));
+  cudaMalloc(&d_B_cublas, N * K * sizeof(float));
 
   cublasHandle_t handle;
   CUBLAS_CHECK(cublasCreate(&handle));
-  CUDA_CHECK(cudaMemcpy(d_b_graph, h_b_original.data(), N * sizeof(float),
+  cudaMemcpy(d_B_graph, h_B_original.data(), N * K * sizeof(float),
+             cudaMemcpyHostToDevice);
+
+  cudaMemcpy(d_B_cublas, h_B_original.data(), N * K * sizeof(float),
+             cudaMemcpyHostToDevice);
+
+  cudaMemset(d_X_graph, 0, N * K * sizeof(float));
+
+  trsmGraphLaunch(N, K, d_A, d_B_graph, d_X_graph, h_X_graph.data());
+  verify_result(N, K, h_X_graph, h_X_true, "Graph");
+
+  CUDA_CHECK(cudaMemcpy(d_B_cublas, h_B_original.data(), N * sizeof(float),
                         cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemset(d_x_graph, 0, N * sizeof(float)));
 
-  trsmGraphLaunch(N, d_A, d_b_graph, d_x_graph, h_x_graph.data());
-  verify_result(N, h_x_graph, h_x_true, "Graph");
-
-  CUDA_CHECK(cudaMemcpy(d_b_cublas, h_b_original.data(), N * sizeof(float),
-                        cudaMemcpyHostToDevice));
-
-  trsmCublasLaunch(handle, N, d_A, d_b_cublas, h_x_cublas.data());
-  verify_result(N, h_x_cublas, h_x_true, "cuBLAS");
+  trsmCublasLaunch(handle, N, K, d_A, d_B_cublas, h_X_cublas.data());
+  verify_result(N, K, h_X_cublas, h_X_true, "cuBLAS");
 
   CUBLAS_CHECK(cublasDestroy(handle));
   cudaFree(d_A);
-  cudaFree(d_x_graph);
-  cudaFree(d_b_graph);
-  cudaFree(d_b_cublas);
+  cudaFree(d_X_graph);
+  cudaFree(d_B_graph);
+  cudaFree(d_B_cublas);
 
   return 0;
 }
