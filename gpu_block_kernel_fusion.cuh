@@ -22,6 +22,12 @@ size_t get_workspace_size(int32_t size) {
 __device__ float* get_block(float *A, const uint32_t i, const uint32_t j, const uint32_t n, const uint32_t m) { return A + i * m * n + j * m; }
 __device__ const float* get_block(const float *A, const uint32_t i, const uint32_t j, const uint32_t n, const uint32_t m) { return A + i * m * n + j * m; }
 
+// This is goated -- Xiaomian
+// input: 
+// gmem: pointer to start of global memory to be written
+// smem: pointer to start of shared memory to be read
+// gmem_w: width of the entire matrix
+// smem_w: width of a block in the matrix to be handled, writing a total of smem_w * smem_w elements
 __device__ void smem_to_gmem(float *gmem, float*smem,
     const uint32_t gmem_w, const uint32_t smem_w
 ) {
@@ -45,6 +51,13 @@ __device__ void smem_to_gmem(float *gmem, float*smem,
 
     __syncthreads();
 }
+
+// This is goated -- Xiaomian
+// input: 
+// gmem: pointer to start of global memory to be read
+// smem: pointer to start of shared memory to be written
+// gmem_w: width of the entire matrix
+// smem_w: width of a block in the matrix to be handled, writing a total of smem_w * smem_w elements
 __device__ void gmem_to_smem(float *gmem, float*smem,
     const uint32_t gmem_w, const uint32_t smem_w
 ) {

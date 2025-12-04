@@ -1,78 +1,18 @@
+
 // TL+ {"compile_flags": ["-lcuda"]}
-// TL+ {"header_files": ["utils.cuh", "trsm_naive.cuh", "cholesky_naive.cuh", "gemm.cuh"]}
+// TL+ {"header_files": ["utils.cuh", "trsm_small.cuh", "cholesky.cuh", "gemm.cuh", "triblock.cuh"]}
 // TL {"workspace_files": []}
 
-//#pragma once
 #include <cstdint>
 #include <cstdio>
 #include <cuda_runtime.h>
 #include <math.h>
 #include <stdio.h>
 #include "utils.cuh"
-#include "trsm_naive.cuh"
-#include "cholesky_naive.cuh"
+#include "trsm_small.cuh"
+#include "cholesky.cuh"
 #include "gemm.cuh"
-
-#define CUDA_CHECK(x) \
-  do { \
-      utils::cuda_check((x), __FILE__, __LINE__); \
-  } while (0)
-
-namespace triblock {
-
-__device__ uint32_t calc_offset(const uint32_t block_n, const uint32_t block_idx) {
-    return block_idx * block_n;
-}
-
-// Works for N >=3, block_n >=2, and block_n <= 32
-// Computes out = in*in^T, block Cholesky decomposition for triblock diagonal
-// N: number of blocks in triblock diagonal
-// block_n: dimension of each block in triblock diagonal
-// note: currently can only handle block_n <=32, this naive version need to be optimized with better shared memory or register reuse
-__global__ void cholesky_trsm_combined(const uint32_t N, const uint32_t block_n, float const *in, float *out) {
-    extern __shared__ float shared_mem[];
-
-    cholesky_naive::cholesky_XY(N*block_n, N, block_n, in, out, 0, 0);
-
-    for (uint32_t i = 1; i < N; ++i) {
-        uint32_t offset_i = calc_offset(block_n, i);
-        uint32_t offset_i_minus_1 = calc_offset(block_n, i-1);
-
-        // run trsm on block A_j, j-1
-    
-        trsm_naive::trsm_transpose_kernel_XY(
-            N, block_n, out, out, in, offset_i_minus_1, offset_i_minus_1, offset_i, offset_i_minus_1, offset_i_minus_1, offset_i);
-        __syncthreads();
-
-        gemm::gemm_naive_XY(N, block_n, in, out, shared_mem, offset_i, offset_i, offset_i, offset_i_minus_1);
-        __syncthreads();
-
-        cholesky_naive::cholesky_XY(block_n, N, block_n, shared_mem, out, offset_i, offset_i);
-        __syncthreads();
-        // if (threadIdx.x == 0) {
-        //     for (uint32_t i = 0; i < N*block_n; ++i) {
-        //         for (uint32_t j = 0; j < N*block_n; ++j) {
-        //             printf("out[%u, %u] = %f\n", i, j, out[i * N*block_n + j]);
-        //         }
-        //     }
-        // }
-    }
-}
-
-
-// only works for block_n <= 32
-void launch_cholesky_trsm_combined(const uint32_t N, const uint32_t block_n, float const *in, float *out) {
-    uint32_t shared_mem_size = 4000 * sizeof(float);
-        CUDA_CHECK(cudaFuncSetAttribute(
-            cholesky_trsm_combined,
-            cudaFuncAttributeMaxDynamicSharedMemorySize,
-            shared_mem_size));
-    cholesky_trsm_combined<<<1, 32 * 32, shared_mem_size>>>(N, block_n, in, out);
-    CUDA_CHECK(cudaDeviceSynchronize());
-}
-}
-
-
+#include "triblock.cuh"
 
 void generate_lower_triangular(uint32_t N, uint32_t block_n, float *A, uint32_t A_col_offset, uint32_t A_row_offset) {
     for (uint32_t i = 0; i < block_n; ++i) {
@@ -165,7 +105,7 @@ void test_triblock(uint32_t N, uint32_t block_n) {
     CUDA_CHECK(cudaMemset(X_d, 0, N * block_n * N * block_n * sizeof(float)));
 
     // Launch kernel (1 block, multiple warps)
-    triblock::launch_cholesky_trsm_combined(N, block_n, A_d, X_d);
+    triblock_small::launch_cholesky_trsm_combined(N, block_n, A_d, X_d);
     CUDA_CHECK(cudaDeviceSynchronize());
 
     CUDA_CHECK(
@@ -243,11 +183,12 @@ void test_triblock(uint32_t N, uint32_t block_n) {
 int main() {
     srand(0);
 
-    test_triblock(3, 2);
+    test_triblock(1, 32);
+    test_triblock(2, 32);
     test_triblock(4, 32);
-    //test_triblock(8, 2);
-    //test_triblock(4, 32);
-    test_triblock(10, 32); // 32, 32 does not work
+    test_triblock(8, 32);
+    test_triblock(16, 32);
+    test_triblock(32, 32); // 32, 32 does not work
     //test_triblock(10, 32);
     return 0;
 }

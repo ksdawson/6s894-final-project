@@ -1,5 +1,5 @@
 // TL+ {"compile_flags": ["-lcuda", "-lcublas", "-lcusolver"]}
-// TL+ {"header_files": ["utils.cuh", "cholesky.cuh", "trsm.cuh", "gpu_block_kernel_fusion.cuh", "cholesky_small.cuh", "trsm_small.cuh", "gpu_block_enhanced_kernel_fusion.cuh", "gtrsm.cuh", "cusolver.cuh", "cusolver_utils.cuh", "gpu_block_enhanced_deluxe_kernel_fusion.cuh"]}
+// TL+ {"header_files": ["utils.cuh", "cholesky.cuh", "trsm.cuh", "gpu_block_kernel_fusion.cuh", "cholesky_small.cuh", "trsm_small.cuh", "gpu_block_enhanced_kernel_fusion.cuh", "gtrsm.cuh", "cusolver.cuh", "cusolver_utils.cuh", "triblock.cuh", "gemm.cuh", "gpu_block_enhanced_deluxe_kernel_fusion.cuh"]}
 // TL+ {"workspace_files": []}
 
 #include <chrono>
@@ -17,12 +17,14 @@
 #include "cholesky_small.cuh"
 #include "trsm_small.cuh"
 #include "gtrsm.cuh"
-//#include "cholesky.cuh"
+#include "cholesky.cuh"
 #include "gpu_block_kernel_fusion.cuh"
 #include "gpu_block_enhanced_kernel_fusion.cuh"
 #include "gpu_block_enhanced_deluxe_kernel_fusion.cuh"
 #include "cusolver.cuh"
 #include "cusolver_utils.cuh"
+#include "triblock.cuh"
+#include "gemm.cuh"
 
 // #define CUDA_CHECK(x) \
 //   do { \
@@ -50,7 +52,8 @@ enum class Phase {
     ENHANCED_CHOLESKY,
     ENHANCED_DELUXE_CHOLESKY,
     CUSOLVER_POTRF,
-    CUBLAS_TRSM
+    CUBLAS_TRSM,
+    TRIBLOCK_SMALL
 };
 
 struct BenchmarkResults {
@@ -60,6 +63,7 @@ struct BenchmarkResults {
 
 struct BenchmarkConfig {
     int32_t size;
+    int32_t block_size;
 };
 
 template <typename Reset, typename F>
@@ -94,6 +98,9 @@ std::vector<float> generate_random_matrix(int32_t size) {
     for (int32_t i = 0; i < size; ++i) {
         for (int32_t j = 0; j < size; ++j) {
             matrix[i * size + j] = static_cast<float>(rand() % 2 + 1);
+            // if (i == j) {
+            //     matrix[i * size + j] += size;
+            // }
         }
     }
     return matrix;
@@ -115,6 +122,24 @@ std::vector<float> generate_lower_triangular_matrix(int32_t size) {
         }
     }
     return matrix;
+}
+
+std::vector<float> generate_lower_triblock_matrix(int32_t size, int32_t block_size) {
+    auto result = std::vector<float>(size * size);
+    for (int32_t i = 0; i < size; ++i) {
+        for (int32_t j = 0; j <= i; ++j) {
+            if (j >= i - block_size - i % block_size) {
+                result[i * size + j] = static_cast<float>(rand() % 2 + 1);
+            } else {
+                result[i * size + j] = 0.0f;
+            }
+            
+            if (j == i) {
+                result[i * size + j] += block_size;
+            }
+        }
+    }
+    return result;
 }
 
 std::vector<float> chol_generate(std::vector<float> const &matrix, int32_t size) {
@@ -157,6 +182,11 @@ TestData generate_test_data(
             data.a[{size}] = generate_lower_triangular_matrix(size);
             data.c[{size}] = generate_random_matrix(size);
             data.b[{size}] = trsm_generate(data.a[{size}], data.c[{size}], size);
+        } else if (phase == Phase::TRIBLOCK_SMALL) {
+            auto size = config.size;
+            auto block_size = config.block_size;
+            data.c[{size}] = generate_lower_triblock_matrix(size, block_size);
+            data.a[{size}] = chol_generate(data.c[{size}], size);
         }
     }
     return data;
@@ -191,6 +221,89 @@ TestData generate_test_data(
 //     return data;
 // }
 
+float calc_error_cholesky(std::vector<float> const &c_out_host, std::vector<float> const &c, int32_t size) {
+    double mse = 0.0;
+    double ref_mean_square = 0.0;
+    for (int32_t i = 0; i < size; ++i) {
+        for (int32_t j = 0; j <= i; ++j) {
+            float diff = c_out_host[i * size + j] - c[i * size + j];
+            mse += diff * diff;
+            ref_mean_square += c[i * size + j] * c[i * size + j];
+        }
+    }
+    mse /= size * size;
+    ref_mean_square /= size * size;
+    float rmse = std::sqrt(mse);
+    float rel_rmse = rmse / std::sqrt(ref_mean_square);
+    return rel_rmse;
+}
+
+float calc_error_trsm(std::vector<float> const &c_out_host, std::vector<float> const &c, int32_t size) {
+    double mse = 0.0;
+    double ref_mean_square = 0.0;
+    for (int32_t i = 0; i < size; ++i) {
+        for (int32_t j = 0; j < size; ++j) {
+            float diff = c_out_host[i * size + j] - c[i * size + j];
+            mse += diff * diff;
+            ref_mean_square += c[i * size + j] * c[i * size + j];
+        }
+    }
+    mse /= size * size;
+    ref_mean_square /= size * size;
+    float rmse = std::sqrt(mse);
+    float rel_rmse = rmse / std::sqrt(ref_mean_square);
+    return rel_rmse;
+}
+
+float calc_error_trsm_T(std::vector<float> const &c_out_host, std::vector<float> const &c, int32_t size) {
+    double mse = 0.0;
+    double ref_mean_square = 0.0;
+    for (int32_t i = 0; i < size; ++i) {
+        for (int32_t j = 0; j < size; ++j) {
+            float diff = c_out_host[j * size + i] - c[i * size + j];
+            mse += diff * diff;
+            ref_mean_square += c[i * size + j] * c[i * size + j];
+        }
+    }
+    mse /= size * size;
+    ref_mean_square /= size * size;
+    float rmse = std::sqrt(mse);
+    float rel_rmse = rmse / std::sqrt(ref_mean_square);
+    return rel_rmse;
+}
+
+double tflops_cholesky(int32_t size) {
+    int32_t num_sqrts = size;
+    int32_t num_fma = size * (size-1) * (size+1) / 3;
+    int32_t num_divs = size * (size-1) / 2;
+
+    int32_t num_ops = num_sqrts + num_fma + num_divs;
+    double tflops = num_ops * 1e-12;
+    return tflops;
+}
+
+double tflops_trsm(int32_t size) {
+    int32_t num_divs = size * size;
+    int32_t num_fma = size * size * (size-1);
+    int32_t num_ops = num_divs + num_fma;
+    double tflops = num_ops * 1e-12;
+    return tflops;
+}
+
+double tflops_gemm(int32_t size) {
+    int32_t num_fma = size * size * size * 2;
+    double tflops = num_fma * 1e-12;
+    return tflops;
+}
+
+double tflops_triblock(int32_t size, int32_t block_size) {
+    int32_t num_blocks = (int32_t)(size / block_size);
+    double tf_chol = tflops_cholesky(block_size) * num_blocks;
+    double tf_trsm = tflops_trsm(block_size) * (num_blocks - 1);
+    double tf_GEMMs = tflops_gemm(block_size) * (num_blocks - 1);
+    double tflops = tf_chol + tf_trsm + tf_GEMMs;
+    return tflops;
+}
 
 template <typename Impl>
 void run_config(
@@ -199,6 +312,7 @@ void run_config(
     BenchmarkConfig const &config,
     BenchmarkResults &results) {
     auto size = config.size;
+    auto block_size = config.block_size;
 
     auto const &a = data.a.at({size});
     auto const &c = data.c.at({size});
@@ -245,19 +359,29 @@ void run_config(
         size * size * sizeof(float),
         cudaMemcpyDeviceToHost));
 
-    double mse = 0.0;
-    double ref_mean_square = 0.0;
-    for (int32_t i = 0; i < size; ++i) {
-        for (int32_t j = 0; j <= i; ++j) {
-            float diff = c_out_host[i * size + j] - c[i * size + j];
-            mse += diff * diff;
-            ref_mean_square += c[i * size + j] * c[i * size + j];
-        }
+    // for (int32_t i = 0; i < size; ++i) {
+    //     for (int32_t j = 0; j < size; ++j) {
+    //         printf("%8.02f ", c_out_host[i * size + j]);
+    //     }
+    //     printf("\n");
+    // }
+    
+    
+    float rel_rmse = 0.0f;
+    double tflops = 0.0;
+    if (phase == Phase::CHOLESKY || phase == Phase::CHOLESKY_SMALL || phase == Phase::ENHANCED_CHOLESKY) {
+        rel_rmse = calc_error_cholesky(c_out_host, c, size);
+        tflops = tflops_cholesky(size);
+    } else if (phase == Phase::TRSM_SMALL) {
+        rel_rmse = calc_error_trsm(c_out_host, c, size);
+        tflops = tflops_trsm(size);
+    } else if (phase == Phase::TRSM) {
+        rel_rmse = calc_error_trsm_T(c_out_host, c, size);
+        tflops = tflops_trsm(size);
+    } else if (phase == Phase::TRIBLOCK_SMALL) {
+        rel_rmse = calc_error_cholesky(c_out_host, c, size);
+        tflops = tflops_triblock(size, block_size);
     }
-    mse /= size * size;
-    ref_mean_square /= size * size;
-    float rmse = std::sqrt(mse);
-    float rel_rmse = rmse / std::sqrt(ref_mean_square);
 
     printf("  %8.02e", rel_rmse);
 
@@ -283,7 +407,7 @@ void run_config(
 
         results.elapsed_ms[{size}] = elapsed_ms;
         //double tflop = 2.0 * size_i * size_k * size_j * 1e-12;
-        printf("  %9.02f ", elapsed_ms);
+        printf("  %9.02f  %7.02f", elapsed_ms, tflops / (elapsed_ms * 1e-3));
     }
 
     printf("\n");
@@ -361,6 +485,7 @@ void run_config_cusolver(
     ref_mean_square /= size * size;
     float rmse = std::sqrt(mse);
     float rel_rmse = rmse / std::sqrt(ref_mean_square);
+    double tflops = tflops_cholesky(size);
 
     printf("  %8.02e", rel_rmse);
 
@@ -385,7 +510,7 @@ void run_config_cusolver(
 
         results.elapsed_ms[{size}] = elapsed_ms;
         //double tflop = 2.0 * size_i * size_k * size_j * 1e-12;
-        printf("  %9.02f ", elapsed_ms);
+        printf("  %9.02f  %7.02f", elapsed_ms, tflops / (elapsed_ms * 1e-3));
     }
 
     printf("\n");
@@ -479,6 +604,7 @@ void run_config_cublas(
     ref_mean_square /= size * size;
     float rmse = std::sqrt(mse);
     float rel_rmse = rmse / std::sqrt(ref_mean_square);
+    double tflops = tflops_trsm(size);
 
     printf("  %8.02e", rel_rmse);
 
@@ -513,7 +639,7 @@ void run_config_cublas(
 
         results.elapsed_ms[{size}] = elapsed_ms;
         //double tflop = 2.0 * size_i * size_k * size_j * 1e-12;
-        printf("  %9.02f ", elapsed_ms);
+        printf("  %9.02f  %7.02f", elapsed_ms, tflops / (elapsed_ms * 1e-3));
     }
 
     printf("\n");
@@ -536,6 +662,8 @@ BenchmarkResults run_all_configs(
         printf("CUSOLVER POTRF:\n\n");
     } else if (phase == Phase::CUBLAS_TRSM) {
         printf("CUBLAS TRSM:\n\n");
+    } else if (phase == Phase::TRIBLOCK_SMALL) {
+        printf("TRIBLOCK SMALL (n = 32):\n\n");
     } else {
         printf("%s:\n\n", Impl::name);
     }
@@ -655,6 +783,23 @@ struct CholeskyEnhanced {
     }
 };
 
+struct TriblockSmall {
+    constexpr static char const *name = "triblock_small";
+    
+    static size_t get_workspace_size(int32_t size) {
+        return triblock_small::get_workspace_size(size);
+    }
+
+    static void 
+    run(int32_t size,
+        float const *a,
+        float *c,
+        float *b,
+        void *workspace) {
+        triblock_small::launch_triblock_small(size, a, c, workspace);
+    }
+};
+
 struct CholeskyEnhancedDeluxe {
     constexpr static char const *name = "cholesky_enhanced_deluxe";
 
@@ -693,6 +838,8 @@ std::vector<BenchmarkResults> run_all_impls(
         results.push_back(run_all_configs<Cholesky>(phase, data, configs));
     } else if (phase == Phase::CUBLAS_TRSM) {
         results.push_back(run_all_configs<Trsm>(phase, data, configs));
+    } else if (phase == Phase::TRIBLOCK_SMALL) {
+        results.push_back(run_all_configs<TriblockSmall>(phase, data, configs));
     } else if (phase == Phase::ENHANCED_DELUXE_CHOLESKY) {
         results.push_back(run_all_configs<CholeskyEnhancedDeluxe>(phase, data, configs));
     }
@@ -737,11 +884,13 @@ int main(int argc, char **argv) {
 
     std::string test_data_dir = ".";
     auto configs = std::vector<BenchmarkConfig>{
-        {32},
-        {64},
-        {128},
-        {512},
-        {1024}
+        {32, 32},
+        {64, 32},
+        {128, 32},
+        {512, 32},
+        {1024, 32},
+        // {2048, 32},
+        // {4096, 32}
     };
     auto data_cholesky = generate_test_data(configs, Phase::CHOLESKY);
     run_all_impls(Phase::CUSOLVER_POTRF, data_cholesky, configs);
@@ -754,9 +903,11 @@ int main(int argc, char **argv) {
     auto data_trsm = generate_test_data(configs, Phase::TRSM);
     run_all_impls(Phase::CUBLAS_TRSM, data_trsm, configs);
     run_all_impls(Phase::TRSM_SMALL, data_trsm, configs);
-    run_all_impls(Phase::TRSM, data_trsm, configs);
+    // run_all_impls(Phase::TRSM, data_trsm, configs);
 
-
+    auto data_triblock = generate_test_data(configs, Phase::TRIBLOCK_SMALL);
+    run_all_impls(Phase::TRIBLOCK_SMALL, data_triblock, configs);
+    run_all_impls(Phase::CUSOLVER_POTRF, data_triblock, configs);
 
     //can compute speedups later if needed -- XY
     // for (int32_t j = 1; j < results.size(); ++j) {
