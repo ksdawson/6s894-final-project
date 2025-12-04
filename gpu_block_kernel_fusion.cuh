@@ -324,12 +324,12 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
     // diagonal_block_update<T_TH, T_TW>(A, L, n, m, j, j, smem);
     block_update<T_TH, T_TW>(A, L, n, m, j, j, smem, smem2);
 
-    // Chol (only first warp participates)
+    // Chol
     float *Ajj = smem;
     float *Ljj = smem2;
     cholesky_small::block_col_cholesky(Ajj, Ljj, m, m, m);
 
-    // Write back Ljj (all threads participate)
+    // Write back Ljj
     Ljj = block_cholesky_space::get_block(L, j, j, n, m);
     smem_to_gmem(Ljj, smem2, n, m);
 }

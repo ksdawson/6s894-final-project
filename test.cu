@@ -1,5 +1,5 @@
 // TL+ {"compile_flags": ["-lcuda"]}
-// TL+ {"header_files": ["cholesky_small.cuh", "cpu.cuh", "utils.cuh", "trsm_small.cuh", "gpu_block_kernel_fusion.cuh", "gpu_block_enhanced_kernel_fusion.cuh"]}
+// TL+ {"header_files": ["cholesky_small.cuh", "cpu.cuh", "utils.cuh", "trsm_small.cuh", "gpu_block_kernel_fusion.cuh", "gpu_block_enhanced_kernel_fusion.cuh", "gpu_block_enhanced_deluxe_kernel_fusion.cuh"]}
 // TL {"workspace_files": []}
 
 #include <cstdint>
@@ -13,6 +13,7 @@
 #include "trsm_small.cuh"
 #include "gpu_block_kernel_fusion.cuh"
 #include "gpu_block_enhanced_kernel_fusion.cuh"
+#include "gpu_block_enhanced_deluxe_kernel_fusion.cuh"
 
 ////////////////////////////////////////////////////////////////////////////////
 // Cholesky test harness
@@ -183,6 +184,7 @@ void test_case_gpu(uint32_t N,
     void (*chol)(const uint32_t n, float const *in, float *out, void *workspace)
 ) {
     printf("Testing Cholesky %ux%u\n", N, N);
+    srand(N);
 
     float *in_cpu  = (float*)malloc(N * N * sizeof(float));
     float *out_cpu = (float*)malloc(N * N * sizeof(float));
@@ -200,6 +202,8 @@ void test_case_gpu(uint32_t N,
     // Run Cholesky
     void *workspace = nullptr;
     chol(N, in_gpu, out_gpu, workspace);
+
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     // Copy result back to host
     CUDA_CHECK(cudaMemcpy(out_cpu, out_gpu, N * N * sizeof(float), cudaMemcpyDeviceToHost));
@@ -431,6 +435,17 @@ int main(int argc, char **argv) {
     test_case_gpu(256, alt_kernel_fusion::launch_block_cholesky);
     printf("8x8 block Cholesky\n");
     test_case_gpu(512, alt_kernel_fusion::launch_block_cholesky);
+    printf("\n");
+
+    printf("Testing GPU block w/ enhanced deluxe kernel fusion\n");
+    printf("1x1 block Cholesky\n");
+    test_case_gpu(64, deluxe_alt_kernel_fusion::launch_block_cholesky);
+    printf("2x2 block Cholesky\n");
+    test_case_gpu(128, deluxe_alt_kernel_fusion::launch_block_cholesky);
+    printf("4x4 block Cholesky\n");
+    test_case_gpu(256, deluxe_alt_kernel_fusion::launch_block_cholesky);
+    printf("8x8 block Cholesky\n");
+    test_case_gpu(512, deluxe_alt_kernel_fusion::launch_block_cholesky);
     printf("\n");
 
     return 0;

@@ -1,5 +1,5 @@
 // TL+ {"compile_flags": ["-lcuda"]}
-// TL+ {"header_files": ["trsm_small.cuh", "cholesky_small.cuh", "gpu_block_kernel_fusion.cuh"]}
+// TL+ {"header_files": ["trsm_small.cuh", "cholesky_small.cuh", "gpu_block_kernel_fusion.cuh", "gpu_block_enhanced_kernel_fusion.cuh"]}
 // TL {"workspace_files": []}
 
 #pragma once
@@ -10,11 +10,12 @@
 #include "trsm_small.cuh"
 #include "cholesky_small.cuh"
 #include "gpu_block_kernel_fusion.cuh"
+#include "gpu_block_enhanced_kernel_fusion.cuh"
 
 ////////////////////////////////////////////////////////////////////////////////
 // Device functions
 
-namespace alt_kernel_fusion {
+namespace deluxe_alt_kernel_fusion {
 
 size_t get_workspace_size(int32_t size) {
     return 0;
@@ -24,7 +25,7 @@ template <uint32_t T_TH, uint32_t T_TW>
 __device__ void diagonal_block_update(float *A, float *L,
     const uint32_t n, const uint32_t m,
     const uint32_t i, const uint32_t j,
-    float *smem
+    float *smem1, float *smem2
 ) {
     // Accumulate update results in registers w/ each thread getting a subtile
     float reg[T_TH * T_TW] = {0.0f}; // zero-init
@@ -37,20 +38,21 @@ __device__ void diagonal_block_update(float *A, float *L,
     const uint32_t N = m / T_TH;
     if (tile_i < N && tile_j < N) {
         // Compute Lij * Lij^T
-        block_cholesky_space::diagonal_block_gemm_naive<T_TH, T_TW>(smem, reg, m, m, tile_i, tile_j);
+        block_cholesky_space::diagonal_block_gemm_naive<T_TH, T_TW>(smem2, reg, m, m, tile_i, tile_j);
 
         // Move A to Aii
         float *Aii = block_cholesky_space::get_block(A, i, i, n, m);
 
         // Move to subtile
         float *_Aii = Aii + tile_i * T_TH * n + tile_j * T_TW;
+        float *_Aii_p = smem1 + tile_i * T_TH * m + tile_j * T_TW;
 
         // Compute Aii - Lij * Lij^T
         #pragma unroll
         for (uint32_t ti = 0; ti < T_TH; ++ti) {
             #pragma unroll
             for (uint32_t tj = 0; tj < (tile_i == tile_j ? ti+1 : T_TW); ++tj) {
-                _Aii[ti * n + tj] -= reg[ti * T_TW + tj];
+                _Aii_p[ti * m + tj] = _Aii[ti * n + tj] - reg[ti * T_TW + tj];
             }
         }
     }
@@ -90,28 +92,23 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
         block_cholesky_space::smem_to_gmem(Lij, smem2, n, m);
 
         // Update Aii
-        diagonal_block_update<T_TH, T_TW>(A, L, n, m, i, j, smem2);
+        if (i == j + 1) {
+            // Update Aii
+            diagonal_block_update<T_TH, T_TW>(A, L, n, m, i, j, smem, smem2);
+            
+            // Chol Aii
+            float *Aii = smem;
+            float *Lii = smem2;
+            cholesky_small::block_col_cholesky(Aii, Lii, m, m, m);
+
+            // Write back Lii
+            Lii = block_cholesky_space::get_block(L, i, i, n, m);
+            block_cholesky_space::smem_to_gmem(Lii, smem2, n, m);
+        } else {
+            // Write back to A
+            alt_kernel_fusion::diagonal_block_update<T_TH, T_TW>(A, L, n, m, i, j, smem2);
+        }
     }
-}
-
-__launch_bounds__(1024)
-__global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matrix
-    const uint32_t n, const uint32_t m, // matrix size, block size
-    const uint32_t j // block col
-) {
-    // Only 1 SM participates
-
-    // Setup smem
-    extern __shared__ float smem[];
-
-    // Chol
-    const float *Ajj = block_cholesky_space::get_block(A, j, j, n, m);
-    float *Ljj = smem;
-    cholesky_small::block_col_cholesky(Ajj, Ljj, n, m, m);
-
-    // Write back Ljj
-    Ljj = block_cholesky_space::get_block(L, j, j, n, m);
-    block_cholesky_space::smem_to_gmem(Ljj, smem, n, m);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -123,27 +120,35 @@ void launch_block_cholesky(
     // Divide the grid into blocks
     constexpr uint32_t m = 64;
 
-    // Setup smem
+    // Setup chol kernel smem
     constexpr int smem_size_bytes = m * m * sizeof(float);
     cudaFuncSetAttribute(
-        chol_kernel,
+        alt_kernel_fusion::chol_kernel,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
         smem_size_bytes
     );
+
+    // Handle matrix smaller than block
+    if (n < m) {
+        alt_kernel_fusion::chol_kernel<<<1, 32*32, smem_size_bytes>>>(in, out, n, n, 0);
+        return;
+    }
+
+    // Setup block kernel smem
     cudaFuncSetAttribute(
         block_kernel<2, 2>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
         smem_size_bytes * 3 // need to store 3 blocks in smem
     );
 
-    // Iterate over block cols launching a kernel for each step
-    for (uint32_t j = 0; j < n / m; ++j) {
-        // Step 1: Chol diagonal block
-        chol_kernel<<<1, 32*32, smem_size_bytes>>>(in, out, n, m, j);
+    // Chol first diagonal block
+    alt_kernel_fusion::chol_kernel<<<1, 32*32, smem_size_bytes>>>(in, out, n, m, 0);
 
-        // Step 2: Trsm then update
+    // Iterate over block cols launching a kernel for each step
+    for (uint32_t j = 0; j < n / m - 1; ++j) {
+        // Trsm then update w/ first off diagonal computing next Chol diagonal block
         block_kernel<2, 2><<<48, 32*32, smem_size_bytes*3>>>(const_cast<float*>(in), out, n, m, j);
     }
 }
 
-} // namespace alt_kernel_fusion
+} // namespace deluxe_alt_kernel_fusion
