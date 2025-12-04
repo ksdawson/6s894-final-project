@@ -113,96 +113,94 @@ __forceinline__ __device__ void blockSubtract(uint32_t n, float const *A,
   }
 }
 template <uint32_t blocksize>
-__global__ void blockSolve_kernel(uint32_t n, float const *A, float *x,
-                                  float *b) {
-  blockSolve<blocksize>(n, A, x, b);
+__global__ void blockSolve_kernel(uint32_t n, uint32_t k, float const *A,
+                                  float *x, float *b) {
+  uint32_t col_idx = blockDim.x;
+  float *x_col = x + col_idx * n;
+  float *b_col = x + col_idx * n;
+  blockSolve<blocksize>(n, A, x_col, b_col);
 }
 
 template <uint32_t blocksize>
-__global__ void blockSubtract_kernel(uint32_t n, float const *A, float *x,
-                                     float *b) {
-  blockSubtract<blocksize>(n, A, x, b);
+__global__ void blockSubtract_kernel(uint32_t n, uint32_t k, float const *A,
+                                     float *x, float *b) {
+  uint32_t col_idx = blockDim.x;
+  float *x_col = x + col_idx * n;
+  float *b_col = x + col_idx * n;
+  blockSubtract<blocksize>(n, A, x_col, b_col);
 }
 
 template <uint32_t blocksize>
 void buildTriangularSolverGraph(cudaGraph_t &graph, int num_blocks,
-                                int n_stride, int d_dim, float const *d_A,
+                                int n_stride, int k_stride, float const *d_A,
                                 float *d_x, float *d_b) {
 
-  std::vector<std::vector<cudaGraphNode_t>> solve_nodes(d_dim);
-  std::vector<std::vector<std::vector<cudaGraphNode_t>>> subtract_nodes(d_dim);
+  std::vector<cudaGraphNode_t> solve_nodes(num_blocks);
+  std::vector<std::vector<cudaGraphNode_t>> subtract_nodes(num_blocks - 1);
 
-  for (int i = 0; i < d_dim; i++)
-    solve_nodes[i].resize(num_blocks);
+  for (int i = 0; i < num_blocks - 1; i++)
+    subtract_nodes[i].resize(i + 1);
 
-  for (int i = 0; i < d_dim; i++) {
-    subtract_nodes[i].resize(num_blocks - 1);
-    for (int j = 0; j < num_blocks - 1; j++)
-      subtract_nodes[i][j].resize(j + 1);
-  }
-
-  dim3 gridDim(1);
+  dim3 gridDim(k_stride);
   dim3 blockDim(blocksize * blocksize > 1024
                     ? 1024
                     : blocksize * blocksize); // NOTE: may be unnecessary
 
-  for (int d = 0; d < d_dim; ++d) {
-    for (int col = 0; col < num_blocks; ++col) {
-      float const *block_A =
-          d_A + (col * blocksize * n_stride) + (col * blocksize);
-      float *block_x = d_x + d * n_stride + (col * blocksize);
-      float *block_b = d_b + d * n_stride + (col * blocksize);
+  for (int col = 0; col < num_blocks; ++col) {
+    float const *sol_A = d_A + (col * blocksize * n_stride) + (col * blocksize);
+    float *sol_x = d_x + (col * blocksize);
+    float *sol_b = d_b + (col * blocksize);
 
-      cudaKernelNodeParams solve_params = {0};
-      solve_params.func = (void *)blockSolve_kernel<blocksize>;
-      solve_params.gridDim = gridDim;
-      solve_params.blockDim = blockDim;
-      solve_params.sharedMemBytes = 0;
+    cudaKernelNodeParams solve_params = {0};
+    solve_params.func = (void *)blockSolve_kernel<blocksize>;
+    solve_params.gridDim = gridDim;
+    solve_params.blockDim = blockDim;
+    solve_params.sharedMemBytes = 0;
 
-      void *kernelArgs[4];
+    void *kernelArgs[5];
+    kernelArgs[0] = &n_stride;
+    kernelArgs[1] = &k_stride;
+    kernelArgs[2] = &sol_A;
+    kernelArgs[3] = &sol_x;
+    kernelArgs[4] = &sol_b;
+    solve_params.kernelParams = kernelArgs;
+    solve_params.extra = NULL;
+
+    cudaGraphAddKernelNode(&solve_nodes[col], graph, NULL, 0, &solve_params);
+
+    for (int row = col + 1; row < num_blocks; ++row) {
+
+      float const *sub_A =
+          d_A + (row * blocksize * n_stride) + (col * blocksize);
+      float *sub_x = d_x + (col * blocksize);
+      float *sub_b = d_b + (row * blocksize);
+
+      cudaKernelNodeParams sub_params = {0};
+      sub_params.func = (void *)blockSubtract_kernel<blocksize>;
+      sub_params.gridDim = gridDim;
+      sub_params.blockDim = blockDim;
+      sub_params.sharedMemBytes = 0;
+
+      void *kernelArgs[5];
       kernelArgs[0] = &n_stride;
-      kernelArgs[1] = &block_A;
-      kernelArgs[2] = &block_x;
-      kernelArgs[3] = &block_b;
-      solve_params.kernelParams = kernelArgs;
-      solve_params.extra = NULL;
+      kernelArgs[1] = &k_stride;
+      kernelArgs[2] = &sub_A;
+      kernelArgs[3] = &sub_x;
+      kernelArgs[4] = &sub_b;
+      sub_params.kernelParams = kernelArgs;
+      sub_params.extra = NULL;
 
-      cudaGraphAddKernelNode(&solve_nodes[d][col], graph, NULL, 0,
-                             &solve_params);
+      cudaGraphAddKernelNode(&subtract_nodes[row - 1][col], graph, NULL, 0,
+                             &sub_params);
 
-      for (int row = col + 1; row < num_blocks; ++row) {
+      cudaGraphAddDependencies(graph, &solve_nodes[col],
+                               &subtract_nodes[row - 1][col], 1);
+    }
 
-        float const *sub_A =
-            d_A + (row * blocksize * n_stride) + (col * blocksize);
-        float *sub_x = d_x + d * n_stride + (col * blocksize);
-        float *sub_b = d_b + d * n_stride + (row * blocksize);
-
-        cudaKernelNodeParams sub_params = {0};
-        sub_params.func = (void *)blockSubtract_kernel<blocksize>;
-        sub_params.gridDim = gridDim;
-        sub_params.blockDim = blockDim;
-        sub_params.sharedMemBytes = 0;
-
-        void *kernelArgs[4];
-        kernelArgs[0] = &n_stride;
-        kernelArgs[1] = &sub_A;
-        kernelArgs[2] = &sub_x;
-        kernelArgs[3] = &sub_b;
-        sub_params.kernelParams = kernelArgs;
-        sub_params.extra = NULL;
-
-        cudaGraphAddKernelNode(&subtract_nodes[d][row - 1][col], graph, NULL, 0,
-                               &sub_params);
-
-        cudaGraphAddDependencies(graph, &solve_nodes[d][col],
-                                 &subtract_nodes[d][row - 1][col], 1);
-      }
-
-      if (col > 0) {
-        for (int row = 0; row < col; ++row) {
-          cudaGraphAddDependencies(graph, &subtract_nodes[d][col - 1][row],
-                                   &solve_nodes[d][col], 1);
-        }
+    if (col > 0) {
+      for (int row = 0; row < col; ++row) {
+        cudaGraphAddDependencies(graph, &subtract_nodes[col - 1][row],
+                                 &solve_nodes[col], 1);
       }
     }
   }
@@ -302,9 +300,9 @@ void verify_result(int N, int K, const std::vector<float> &X,
 
 int main() {
   const int BLOCK_SIZE = 32;
-  const int NUM_BLOCKS = 32;
+  const int NUM_BLOCKS = 2;
   const int N = BLOCK_SIZE * NUM_BLOCKS;
-  const int K = 2;
+  const int K = 1;
 
   std::cout << "--- TRSM Comparison (Graph vs. cuBLAS) ---\n";
   std::cout << "Matrix Size: " << N << "x" << N << std::endl;
@@ -339,8 +337,6 @@ int main() {
       h_B_original[col * N + i] = sum;
     }
   }
-
-  flush_gpu();
 
   float *d_A, *d_X_graph, *d_B_graph, *d_B_cublas;
 
