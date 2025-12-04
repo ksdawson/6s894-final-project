@@ -92,7 +92,7 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
     // Each SM gets a block
     for (uint32_t i = j + 1 + blockIdx.x; i < n / m; i += gridDim.x) {
         // Update
-        block_cholesky_space::block_update<T_TH, T_TW>(A, L, n, m, i, j, smem);
+        block_cholesky_space::block_update<T_TH, T_TW>(A, L, n, m, i, j, smem, smem2);
 
         // Load Ljj into smem
         float *Ljj = block_cholesky_space::get_block(L, j, j, n, m);

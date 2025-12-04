@@ -65,16 +65,25 @@ template <uint32_t T_TH, uint32_t T_TW>
 __device__ void block_update(const float *A, float *L,
     const uint32_t n, const uint32_t m,
     const uint32_t i, const uint32_t j,
-    float *smem
+    float *smem1, float*smem2
 ) {
     // Accumulate update results in registers w/ each thread getting a subtile
     float reg[T_TH * T_TW] = {0.0f}; // zero-init
 
     // Sum Lik * Ljk^T
     for (uint32_t k = 0; k < j; ++k) {
+        // Load Lik, Ljk into smem
         float *Lik = get_block(L, i, k, n, m);
         float *Ljk = get_block(L, j, k, n, m);
-        block_gemm_naive<T_TH, T_TW>(Lik, Ljk, reg, n, n, m);
+        for (uint32_t idx = threadIdx.x; idx < m * m; idx += blockDim.x) {
+            const uint32_t ti = idx / m;
+            const uint32_t tj = idx % m;
+            smem1[idx] = Lik[ti * n + tj];
+            smem2[idx] = Ljk[ti * n + tj];
+        }
+        __syncthreads();
+
+        block_gemm_naive<T_TH, T_TW>(smem1, smem2, reg, m, m, m);
     }
 
     // Move A to Aij 
@@ -84,7 +93,7 @@ __device__ void block_update(const float *A, float *L,
     const uint32_t tile_i = threadIdx.x / (m / T_TW);
     const uint32_t tile_j = threadIdx.x % (m / T_TW);
     const float *_Aij = Aij + tile_i * T_TH * n + tile_j * T_TW;
-    float *_Aij_p = smem + tile_i * T_TH * m + tile_j * T_TW;
+    float *_Aij_p = smem1 + tile_i * T_TH * m + tile_j * T_TW;
 
     // Compute Aij - sum
     #pragma unroll
@@ -106,11 +115,12 @@ __global__ void block_kernel(const float *A, float *L, // input matrix, Chol mat
 ) {
     // Setup smem
     extern __shared__ float smem[];
+    float *smem2 = smem + m * m;
 
     // Each SM gets a block
     for (uint32_t i = j + 1 + blockIdx.x; i < n / m; i += gridDim.x) {
         // Update
-        block_update<T_TH, T_TW>(A, L, n, m, i, j, smem);
+        block_update<T_TH, T_TW>(A, L, n, m, i, j, smem, smem2);
 
         // TRSM
         float *Lij = get_block(L, i, j, n, m);
@@ -129,9 +139,10 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
 
     // Setup smem
     extern __shared__ float smem[];
+    float *smem2 = smem + m * m;
 
     // Update (all threads participate)
-    block_update<T_TH, T_TW>(A, L, n, m, j, j, smem);
+    block_update<T_TH, T_TW>(A, L, n, m, j, j, smem, smem2);
 
     // Chol (only first warp participates)
     float *Ajj = smem;
