@@ -231,8 +231,7 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
     // Chol (only first warp participates)
     float *Ajj = smem;
     float *Ljj = smem2;
-    cholesky_small::block_cholesky(Ajj, Ljj, m, m, m);
-    __syncthreads();
+    cholesky_small::block_col_cholesky(Ajj, Ljj, m, m, m);
 
     // Write back Ljj (all threads participate)
     Ljj = block_cholesky_space::get_block(L, j, j, n, m);
