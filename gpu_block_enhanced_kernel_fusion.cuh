@@ -31,12 +31,25 @@ __device__ void diagonal_block_gemm_naive(float *A, float* C,
     float *_B = A + tile_j * T_TH * A_n;
 
     // Each thread handles a tile
-    #pragma unroll
-    for (uint32_t ti = 0; ti < T_TH; ++ti) {
+    for (uint32_t tk = 0; tk < r; tk += 4) {
         #pragma unroll
-        for (uint32_t tj = 0; tj < T_TW; ++tj) {
-            for (uint32_t tk = 0; tk < r; ++tk) {
-                C[ti * T_TW + tj] += _A[ti * A_n + tk] * _B[tj * A_n + tk];
+        for (uint32_t ti = 0; ti < T_TH; ++ti) {
+            const float4 a = *(reinterpret_cast<float4*>(_A + ti * A_n + tk));
+            #pragma unroll
+            for (uint32_t tj = 0; tj < T_TW; ++tj) {
+                const float4 b = *(reinterpret_cast<float4*>(_B + tj * A_n + tk));
+                C[ti * T_TW + tj] += (a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w);
+            }
+        }
+    }
+    // Handle tail
+    for (uint32_t tk = (r / 4) * 4; tk < r; ++tk) {
+        #pragma unroll
+        for (uint32_t ti = 0; ti < T_TH; ++ti) {
+            const float a = _A[ti * A_n + tk];
+            #pragma unroll
+            for (uint32_t tj = 0; tj < T_TW; ++tj) {
+                C[ti * T_TW + tj] += a * _B[tj * A_n + tk];
             }
         }
     }
