@@ -22,13 +22,14 @@ size_t get_workspace_size(int32_t size) {
 
 template <uint32_t T_TH, uint32_t T_TW>
 __device__ void diagonal_block_gemm_naive(float *A, float* C,
-    const uint A_n, const uint32_t r
+    const uint A_n, const uint32_t r,
+    const uint32_t tile_i, const uint32_t tile_j
 ) {
     // TODO: AA^T is symmetric so only need to compute lower triangle
 
     // Move to subtile
-    const uint32_t tile_i = threadIdx.x / (r / T_TW);
-    const uint32_t tile_j = threadIdx.x % (r / T_TW);
+    // const uint32_t tile_i = threadIdx.x / (r / T_TW);
+    // const uint32_t tile_j = threadIdx.x % (r / T_TW);
     float *_A = A + tile_i * T_TH * A_n;
     float *_B = A + tile_j * T_TH * A_n;
 
@@ -38,7 +39,7 @@ __device__ void diagonal_block_gemm_naive(float *A, float* C,
         for (uint32_t ti = 0; ti < T_TH; ++ti) {
             const float4 a = *(reinterpret_cast<float4*>(_A + ti * A_n + tk));
             #pragma unroll
-            for (uint32_t tj = 0; tj < T_TW; ++tj) {
+            for (uint32_t tj = 0; tj < (tile_i == tile_j ? ti+1 : T_TW); ++tj) {
                 if ((_A + ti * A_n + tk) == (_B + tj * A_n + tk)) {
                     // If i==j reuse a
                     C[ti * T_TW + tj] += (a.x * a.x + a.y * a.y + a.z * a.z + a.w * a.w);
@@ -55,14 +56,11 @@ __device__ void diagonal_block_gemm_naive(float *A, float* C,
         for (uint32_t ti = 0; ti < T_TH; ++ti) {
             const float a = _A[ti * A_n + tk];
             #pragma unroll
-            for (uint32_t tj = 0; tj < T_TW; ++tj) {
+            for (uint32_t tj = 0; tj < (tile_i == tile_j ? ti+1 : T_TW); ++tj) {
                 C[ti * T_TW + tj] += a * _B[tj * A_n + tk];
             }
         }
     }
-
-    // Make sure every thread is done
-    __syncthreads();
 }
 
 template <uint32_t T_TH, uint32_t T_TW>
@@ -73,24 +71,30 @@ __device__ void diagonal_block_update(float *A, float *L,
 ) {
     // Accumulate update results in registers w/ each thread getting a subtile
     float reg[T_TH * T_TW] = {0.0f}; // zero-init
+    
+    // Map rectangular to triangular tiles
+    const uint32_t tile_i = (uint32_t)((sqrtf(8.f * threadIdx.x + 1.f) - 1.f) * 0.5f);
+    const uint32_t tile_j = threadIdx.x - (tile_i * (tile_i + 1) / 2);
 
-    // Compute Lij * Lij^T
-    diagonal_block_gemm_naive<T_TH, T_TW>(smem, reg, m, m);
+    // Only compute if valid tile
+    const uint32_t N = m / T_TH;
+    if (tile_i < N && tile_j < N) {
+        // Compute Lij * Lij^T
+        diagonal_block_gemm_naive<T_TH, T_TW>(smem, reg, m, m, tile_i, tile_j);
 
-    // Move A to Aii
-    float *Aii = block_cholesky_space::get_block(A, i, i, n, m);
+        // Move A to Aii
+        float *Aii = block_cholesky_space::get_block(A, i, i, n, m);
 
-    // Move to subtile
-    const uint32_t tile_i = threadIdx.x / (m / T_TW);
-    const uint32_t tile_j = threadIdx.x % (m / T_TW);
-    float *_Aii = Aii + tile_i * T_TH * n + tile_j * T_TW;
+        // Move to subtile
+        float *_Aii = Aii + tile_i * T_TH * n + tile_j * T_TW;
 
-    // Compute Aii - Lij * Lij^T
-    #pragma unroll
-    for (uint32_t ti = 0; ti < T_TH; ++ti) {
+        // Compute Aii - Lij * Lij^T
         #pragma unroll
-        for (uint32_t tj = 0; tj < T_TW; ++tj) {
-            _Aii[ti * n + tj] -= reg[ti * T_TW + tj];
+        for (uint32_t ti = 0; ti < T_TH; ++ti) {
+            #pragma unroll
+            for (uint32_t tj = 0; tj < (tile_i == tile_j ? ti+1 : T_TW); ++tj) {
+                _Aii[ti * n + tj] -= reg[ti * T_TW + tj];
+            }
         }
     }
 
