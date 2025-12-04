@@ -152,11 +152,10 @@ __device__ void diagonal_block_gemm_naive(float *A, float* C,
 
 template <uint32_t T_TH, uint32_t T_TW>
 __device__ void block_gemm_naive(float *A, float *B, float* C,
-    const uint32_t A_n, const uint32_t B_n, const uint32_t r
+    const uint32_t A_n, const uint32_t B_n, const uint32_t r,
+    const uint32_t tile_i, const uint32_t tile_j
 ) {
     // Move to subtile
-    const uint32_t tile_i = threadIdx.x / (r / T_TW);
-    const uint32_t tile_j = threadIdx.x % (r / T_TW);
     float *_A = A + tile_i * T_TH * A_n;
     float *_B = B + tile_j * T_TH * B_n;
 
@@ -196,6 +195,8 @@ __device__ void block_update(const float *A, float *L,
 ) {
     // Accumulate update results in registers w/ each thread getting a subtile
     float reg[T_TH * T_TW] = {0.0f}; // zero-init
+    const uint32_t tile_i = threadIdx.x / (m / T_TW);
+    const uint32_t tile_j = threadIdx.x % (m / T_TW);
 
     // Sum Lik * Ljk^T
     for (uint32_t k = 0; k < j; ++k) {
@@ -204,15 +205,13 @@ __device__ void block_update(const float *A, float *L,
         float *Ljk = get_block(L, j, k, n, m);
         gmem_to_smem(Lik, Ljk, smem1, smem2, n, m);
 
-        block_gemm_naive<T_TH, T_TW>(smem1, smem2, reg, m, m, m);
+        block_gemm_naive<T_TH, T_TW>(smem1, smem2, reg, m, m, m, tile_i, tile_j);
     }
 
     // Move A to Aij 
     const float *Aij = get_block(A, i, j, n, m);
 
     // Move to subtile
-    const uint32_t tile_i = threadIdx.x / (m / T_TW);
-    const uint32_t tile_j = threadIdx.x % (m / T_TW);
     const float *_Aij = Aij + tile_i * T_TH * n + tile_j * T_TW;
     float *_Aij_p = smem1 + tile_i * T_TH * m + tile_j * T_TW;
 
