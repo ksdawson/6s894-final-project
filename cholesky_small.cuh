@@ -107,16 +107,6 @@ __device__ void block_col_cholesky(float const *A, float *L,
             const float ljk = L[j * L_n + k];
             ajj += ljk * ljk;
         }
-
-        // for (uint32_t k = thread_idx; k < j / 4; k += 32) {
-        //     const float4 ljk = *(reinterpret_cast<float4*>(L + j * L_n) + k);
-        //     ajj += (ljk.x * ljk.x + ljk.y * ljk.y + ljk.z * ljk.z + ljk.w * ljk.w);
-        // }
-        // for (uint32_t k = (j / 4) * 4 + thread_idx; k < j; k += 32) {
-        //     const float ljk = L[j * L_n + k];
-        //     ajj += ljk * ljk;
-        // }
-
         ajj = A[j * A_n + j] - utils::warp_prefix_sum<float>(ajj);
         const float ljj = sqrtf(ajj);
 
@@ -126,16 +116,6 @@ __device__ void block_col_cholesky(float const *A, float *L,
             for (uint32_t k = thread_idx; k < j; k += 32) {
                 aij += L[i * L_n + k] * L[j * L_n + k];
             }
-
-            // for (uint32_t k = thread_idx; k < j / 4; k += 32) {
-            //     const float4 lik = *(reinterpret_cast<float4*>(L + i * L_n) + k);
-            //     const float4 ljk = *(reinterpret_cast<float4*>(L + j * L_n) + k);
-            //     aij += (lik.x * ljk.x + lik.y * ljk.y + lik.z * ljk.z + lik.w * ljk.w);
-            // }
-            // for (uint32_t k = (j / 4) * 4 + thread_idx; k < j; k += 32) {
-            //     aij += L[i * L_n + k] * L[j * L_n + k];
-            // }
-
             aij = A[i * A_n + j] - utils::warp_prefix_sum<float>(aij);
             const float lij = aij / ljj;
 
