@@ -1,6 +1,6 @@
 #pragma once
-#include "utils.cuh"
 #include "cusolver_utils.cuh"
+#include "utils.cuh"
 #include <cstdint>
 #include <cstdio>
 #include <cublas_v2.h>
@@ -13,21 +13,19 @@
 #include <vector>
 
 namespace trsm_space {
-  size_t get_workspace_size(int32_t size) {
-    return 0;
-  }
+size_t get_workspace_size(int32_t size) { return 0; }
 
-// #define CUDA_CHECK(err)                                                        \
-//   if ((err) != cudaSuccess) {                                                  \
-//     fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__,           \
-//             cudaGetErrorString(err));                                          \
-//     exit(EXIT_FAILURE);                                                        \
+// #define CUDA_CHECK(err) \
+//   if ((err) != cudaSuccess) { \
+//     fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, \
+//             cudaGetErrorString(err)); \
+//     exit(EXIT_FAILURE); \
 //   }
 
-// #define CUBLAS_CHECK(err)                                                      \
-//   if ((err) != CUBLAS_STATUS_SUCCESS) {                                        \
-//     fprintf(stderr, "cuBLAS error at %s:%d\n", __FILE__, __LINE__);            \
-//     exit(EXIT_FAILURE);                                                        \
+// #define CUBLAS_CHECK(err) \
+//   if ((err) != CUBLAS_STATUS_SUCCESS) { \
+//     fprintf(stderr, "cuBLAS error at %s:%d\n", __FILE__, __LINE__); \
+//     exit(EXIT_FAILURE); \
 //   }
 
 __forceinline__ __device__ void index2rowcol(uint32_t *row, uint32_t *col,
@@ -116,92 +114,94 @@ __forceinline__ __device__ void blockSubtract(uint32_t n, float const *A,
   }
 }
 template <uint32_t blocksize>
-__global__ void blockSolve_kernel(uint32_t n, const float *A, float *x, float *b) {
-  blockSolve<blocksize>(n, A, x, b);
+__global__ void blockSolve_kernel(uint32_t n, uint32_t k, float const *A,
+                                  float *x, float *b) {
+  uint32_t col_idx = blockIdx.x;
+  float *x_col = x + col_idx * n;
+  float *b_col = b + col_idx * n;
+  blockSolve<blocksize>(n, A, x_col, b_col);
 }
 
 template <uint32_t blocksize>
-__global__ void blockSubtract_kernel(uint32_t n, const float *A, float *x, float *b) {
-  blockSubtract<blocksize>(n, A, x, b);
+__global__ void blockSubtract_kernel(uint32_t n, uint32_t k, float const *A,
+                                     float *x, float *b) {
+  uint32_t col_idx = blockIdx.x;
+  float *x_col = x + col_idx * n;
+  float *b_col = b + col_idx * n;
+  blockSubtract<blocksize>(n, A, x_col, b_col);
 }
 
 template <uint32_t blocksize>
 void buildTriangularSolverGraph(cudaGraph_t &graph, int num_blocks,
-                                int n_stride, int d_dim, const float *d_A, float *d_x,
-                                float *d_b) {
+                                int n_stride, int k_stride, float const *d_A,
+                                float *d_x, float *d_b) {
 
-  std::vector<std::vector<cudaGraphNode_t>> solve_nodes(d_dim);
-  std::vector<std::vector<std::vector<cudaGraphNode_t>>> subtract_nodes(d_dim);
+  std::vector<cudaGraphNode_t> solve_nodes(num_blocks);
+  std::vector<std::vector<cudaGraphNode_t>> subtract_nodes(num_blocks - 1);
 
-  for (int i = 0; i < d_dim; i++)
-    solve_nodes[i].resize(num_blocks);
+  for (int i = 0; i < num_blocks - 1; i++)
+    subtract_nodes[i].resize(i + 1);
 
-  for (int i = 0; i < d_dim; i++) {
-    subtract_nodes[i].resize(num_blocks - 1);
-    for (int j = 0; j < num_blocks - 1; j++)
-      subtract_nodes[i][j].resize(j + 1);
-  }
-
-  dim3 gridDim(1);
+  dim3 gridDim(k_stride);
   dim3 blockDim(blocksize * blocksize > 1024
                     ? 1024
                     : blocksize * blocksize); // NOTE: may be unnecessary
 
-  for (int d = 0; d < d_dim; ++d) {
-    for (int col = 0; col < num_blocks; ++col) {
-      const float *block_A = d_A + (col * blocksize * n_stride) + (col * blocksize);
-      float *block_x = d_x + d * n_stride + (col * blocksize);
-      float *block_b = d_b + d * n_stride + (col * blocksize);
+  for (int col = 0; col < num_blocks; ++col) {
+    float const *sol_A = d_A + (col * blocksize * n_stride) + (col * blocksize);
+    float *sol_x = d_x + (col * blocksize);
+    float *sol_b = d_b + (col * blocksize);
 
-      cudaKernelNodeParams solve_params = {0};
-      solve_params.func = (void *)blockSolve_kernel<blocksize>;
-      solve_params.gridDim = gridDim;
-      solve_params.blockDim = blockDim;
-      solve_params.sharedMemBytes = 0;
+    cudaKernelNodeParams solve_params = {0};
+    solve_params.func = (void *)blockSolve_kernel<blocksize>;
+    solve_params.gridDim = gridDim;
+    solve_params.blockDim = blockDim;
+    solve_params.sharedMemBytes = 0;
 
-      void *kernelArgs[4];
+    void *kernelArgs[5];
+    kernelArgs[0] = &n_stride;
+    kernelArgs[1] = &k_stride;
+    kernelArgs[2] = &sol_A;
+    kernelArgs[3] = &sol_x;
+    kernelArgs[4] = &sol_b;
+    solve_params.kernelParams = kernelArgs;
+    solve_params.extra = NULL;
+
+    cudaGraphAddKernelNode(&solve_nodes[col], graph, NULL, 0, &solve_params);
+
+    for (int row = col + 1; row < num_blocks; ++row) {
+
+      float const *sub_A =
+          d_A + (row * blocksize * n_stride) + (col * blocksize);
+      float *sub_x = d_x + (col * blocksize);
+      float *sub_b = d_b + (row * blocksize);
+
+      cudaKernelNodeParams sub_params = {0};
+      sub_params.func = (void *)blockSubtract_kernel<blocksize>;
+      sub_params.gridDim = gridDim;
+      sub_params.blockDim = blockDim;
+      sub_params.sharedMemBytes = 0;
+
+      void *kernelArgs[5];
       kernelArgs[0] = &n_stride;
-      kernelArgs[1] = &block_A;
-      kernelArgs[2] = &block_x;
-      kernelArgs[3] = &block_b;
-      solve_params.kernelParams = kernelArgs;
-      solve_params.extra = NULL;
+      kernelArgs[1] = &k_stride;
+      kernelArgs[2] = &sub_A;
+      kernelArgs[3] = &sub_x;
+      kernelArgs[4] = &sub_b;
+      sub_params.kernelParams = kernelArgs;
+      sub_params.extra = NULL;
 
-      cudaGraphAddKernelNode(&solve_nodes[d][col], graph, NULL, 0,
-                             &solve_params);
+      cudaGraphAddKernelNode(&subtract_nodes[row - 1][col], graph, NULL, 0,
+                             &sub_params);
 
-      for (int row = col + 1; row < num_blocks; ++row) {
+      cudaGraphAddDependencies(graph, &solve_nodes[col],
+                               &subtract_nodes[row - 1][col], 1);
+    }
 
-        const float *sub_A = d_A + (row * blocksize * n_stride) + (col * blocksize);
-        float *sub_x = d_x + d * n_stride + (col * blocksize);
-        float *sub_b = d_b + d * n_stride + (row * blocksize);
-
-        cudaKernelNodeParams sub_params = {0};
-        sub_params.func = (void *)blockSubtract_kernel<blocksize>;
-        sub_params.gridDim = gridDim;
-        sub_params.blockDim = blockDim;
-        sub_params.sharedMemBytes = 0;
-
-        void *kernelArgs[4];
-        kernelArgs[0] = &n_stride;
-        kernelArgs[1] = &sub_A;
-        kernelArgs[2] = &sub_x;
-        kernelArgs[3] = &sub_b;
-        sub_params.kernelParams = kernelArgs;
-        sub_params.extra = NULL;
-
-        cudaGraphAddKernelNode(&subtract_nodes[d][row - 1][col], graph, NULL, 0,
-                               &sub_params);
-
-        cudaGraphAddDependencies(graph, &solve_nodes[d][col],
-                                 &subtract_nodes[d][row - 1][col], 1);
-      }
-
-      if (col > 0) {
-        for (int row = 0; row < col; ++row) {
-          cudaGraphAddDependencies(graph, &subtract_nodes[d][col - 1][row],
-                                   &solve_nodes[d][col], 1);
-        }
+    if (col > 0) {
+      for (int row = 0; row < col; ++row) {
+        cudaGraphAddDependencies(graph, &subtract_nodes[col - 1][row],
+                                 &solve_nodes[col], 1);
       }
     }
   }
@@ -248,7 +248,8 @@ void trsmGraphLaunch(uint32_t n, float *A_d, float *b_d, float *x_d,
   printf("Custom Graph TRSM Time: %.3f ms\n", milliseconds);
 }
 
-void launch_trsm(uint32_t n, const float *A, float *x, float *b, void *workspace) {
+void launch_trsm(uint32_t n, const float *A, float *x, float *b,
+                 void *workspace) {
   constexpr uint32_t blocksize = 32;
   uint32_t numblocks = n / blocksize;
 
@@ -258,7 +259,7 @@ void launch_trsm(uint32_t n, const float *A, float *x, float *b, void *workspace
   buildTriangularSolverGraph<blocksize>(graph, numblocks, n, n, A, x, b);
   cudaGraphExec_t graphExec;
   CUDA_CHECK(cudaGraphInstantiate(&graphExec, graph, NULL, NULL, 0));
-  
+
   cudaGraphExecDestroy(graphExec);
   cudaGraphDestroy(graph);
 }
@@ -294,7 +295,6 @@ void trsmCublasLaunch(cublasHandle_t handle, uint32_t n, float *A_d, float *b_d,
 
   printf("cuBLAS TRSM Time:      %.3f ms\n", milliseconds);
 }
-
 
 void verify_result(int n, const std::vector<float> &x_result,
                    const std::vector<float> &x_true, const std::string &label) {
@@ -380,4 +380,4 @@ int main() {
 
   return 0;
 }
-}
+} // namespace trsm_space

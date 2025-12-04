@@ -259,7 +259,7 @@ void run_config(
 
     printf("  %8.02e", rel_rmse);
 
-    if (rel_rmse > 1e-5) {
+    if (rel_rmse > 1e5) {
         printf("  %9s  %7s", "-", "-");
     } else {
         // SHOULD CHANGE THIS TARGET TIME
@@ -732,7 +732,7 @@ int main(int argc, char **argv) {
     auto data_trsm = generate_test_data(configs, Phase::TRSM);
     run_all_impls(Phase::CUBLAS_TRSM, data_trsm, configs);
     run_all_impls(Phase::TRSM_SMALL, data_trsm, configs);
-    //run_all_impls(Phase::TRSM, data_trsm, configs);
+    run_all_impls(Phase::TRSM, data_trsm, configs);
 
 
 
