@@ -37,6 +37,11 @@ __device__ void diagonal_block_gemm_naive(float *A, float* C,
             const float4 a = *(reinterpret_cast<float4*>(_A + ti * A_n + tk));
             #pragma unroll
             for (uint32_t tj = 0; tj < T_TW; ++tj) {
+                if ((_A + ti * A_n + tk) == (_B + tj * A_n + tk)) {
+                    // If i==j reuse a
+                    C[ti * T_TW + tj] += (a.x * a.x + a.y * a.y + a.z * a.z + a.w * a.w);
+                    continue;
+                }
                 const float4 b = *(reinterpret_cast<float4*>(_B + tj * A_n + tk));
                 C[ti * T_TW + tj] += (a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w);
             }
