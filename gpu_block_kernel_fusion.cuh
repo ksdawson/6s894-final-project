@@ -47,14 +47,25 @@ __device__ void block_gemm_naive(float *A, float *B, float* C,
     float *_B = B + tile_j * T_TH * B_n;
 
     // Each thread handles a tile
-    for (uint32_t tk = 0; tk < r; ++tk) {
+    for (uint32_t tk = 0; tk < r; tk += 4) {
         #pragma unroll
         for (uint32_t ti = 0; ti < T_TH; ++ti) {
-            const uint32_t c_i_offset = ti * T_TW;
-            const float tmp = _A[ti * A_n + tk];
+            const float4 a = *(reinterpret_cast<float4*>(_A + ti * A_n + tk));
             #pragma unroll
             for (uint32_t tj = 0; tj < T_TW; ++tj) {
-                C[c_i_offset + tj] += tmp * _B[tj * B_n + tk];
+                const float4 b = *(reinterpret_cast<float4*>(_B + tj * B_n + tk));
+                C[ti * T_TW + tj] += (a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w);
+            }
+        }
+    }
+    // Handle tail
+    for (uint32_t tk = (r / 4) * 4; tk < r; ++tk) {
+        #pragma unroll
+        for (uint32_t ti = 0; ti < T_TH; ++ti) {
+            const float a = _A[ti * A_n + tk];
+            #pragma unroll
+            for (uint32_t tj = 0; tj < T_TW; ++tj) {
+                C[ti * T_TW + tj] += a * _B[tj * B_n + tk];
             }
         }
     }
