@@ -14,6 +14,8 @@ namespace utils {
       exit(EXIT_FAILURE); \
   }
 
+
+
 template <typename T> __device__ T warp_prefix_sum(T val) {
   // Computes parallel prefix on 32 elements using Hillis Steele Scan w/ warp
   // shuffle

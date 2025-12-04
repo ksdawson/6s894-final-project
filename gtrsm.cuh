@@ -1,4 +1,6 @@
+#pragma once
 #include "utils.cuh"
+#include "cusolver_utils.cuh"
 #include <cstdint>
 #include <cstdio>
 #include <cublas_v2.h>
@@ -22,11 +24,11 @@ namespace trsm_space {
 //     exit(EXIT_FAILURE);                                                        \
 //   }
 
-#define CUBLAS_CHECK(err)                                                      \
-  if ((err) != CUBLAS_STATUS_SUCCESS) {                                        \
-    fprintf(stderr, "cuBLAS error at %s:%d\n", __FILE__, __LINE__);            \
-    exit(EXIT_FAILURE);                                                        \
-  }
+// #define CUBLAS_CHECK(err)                                                      \
+//   if ((err) != CUBLAS_STATUS_SUCCESS) {                                        \
+//     fprintf(stderr, "cuBLAS error at %s:%d\n", __FILE__, __LINE__);            \
+//     exit(EXIT_FAILURE);                                                        \
+//   }
 
 __forceinline__ __device__ void index2rowcol(uint32_t *row, uint32_t *col,
                                              uint32_t k) {

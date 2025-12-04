@@ -1,6 +1,7 @@
-// TL+ {"compile_flags": ["-lcuda", "-lcublas"]}
-// TL+ {"header_files": ["utils.cuh", "cholesky.cuh", "trsm.cuh", "gpu_block_kernel_fusion.cuh", "cholesky_small.cuh", "trsm_small.cuh", "gpu_block_enhanced_kernel_fusion.cuh", "gtrsm.cuh"]}
+// TL+ {"compile_flags": ["-lcuda", "-lcublas", "-lcusolver"]}
+// TL+ {"header_files": ["utils.cuh", "cholesky.cuh", "trsm.cuh", "gpu_block_kernel_fusion.cuh", "cholesky_small.cuh", "trsm_small.cuh", "gpu_block_enhanced_kernel_fusion.cuh", "gtrsm.cuh", "cusolver.cuh", "cusolver_utils.cuh"]}
 // TL+ {"workspace_files": []}
+
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -19,6 +20,8 @@
 //#include "cholesky.cuh"
 #include "gpu_block_kernel_fusion.cuh"
 #include "gpu_block_enhanced_kernel_fusion.cuh"
+#include "cusolver.cuh"
+#include "cusolver_utils.cuh"
 
 // #define CUDA_CHECK(x) \
 //   do { \
@@ -226,9 +229,7 @@ void run_config(
 
     printf("  %6d", size);
 
-    if (phase == Phase::CHOLESKY || phase == Phase::CHOLESKY_SMALL || phase == Phase::ENHANCED_CHOLESKY) {
-        
-    } else if (phase == Phase::TRSM || phase == Phase::TRSM_SMALL) {
+    if (phase == Phase::TRSM || phase == Phase::TRSM_SMALL) {
         auto const &b = data.b.at({size});
         CUDA_CHECK(cudaMemcpy(b_gpu, b.data(), size * size * sizeof(float), cudaMemcpyHostToDevice));
     }
@@ -293,6 +294,104 @@ void run_config(
     }
 }
 
+void run_config_cusolver(
+    Phase phase,
+    TestData const &data,
+    BenchmarkConfig const &config,
+    BenchmarkResults &results) {
+    auto size = config.size;
+
+    auto const &a = data.a.at({size});
+    auto const &c = data.c.at({size});
+
+    float *a_gpu;
+    CUDA_CHECK(cudaMalloc(&a_gpu, size * size * sizeof(float)));
+    
+    CUDA_CHECK(cudaMemcpy(
+        a_gpu,
+        a.data(),
+        size * size * sizeof(float),
+        cudaMemcpyHostToDevice));
+    
+    cusolverDnHandle_t cusolverH = NULL;
+    cusolverDnParams_t params = NULL;
+    cublasFillMode_t uplo = CUBLAS_FILL_MODE_UPPER;
+    int *d_info = nullptr;    /* error info */
+    size_t workspaceInBytesOnDevice = 0; /* size of workspace */
+    void *d_work = nullptr;              /* device workspace */
+    size_t workspaceInBytesOnHost = 0;   /* size of workspace */
+    void *h_work = nullptr;              /* host workspace */
+
+    cusolver_potrf::set_potrf(&cusolverH, &params, 
+        &d_info, &workspaceInBytesOnDevice, &d_work, 
+        &workspaceInBytesOnHost, &h_work, size, a_gpu, uplo);
+    
+
+    //need to flush gpu caches before benchmarking each run, might have to change size based on GPU
+    void *flush_gpu = nullptr;
+    CUDA_CHECK(cudaMalloc(&flush_gpu, 1024*1024*64));
+    CUDA_CHECK(cudaMemset(flush_gpu, 1, 1024*1024*64));
+
+    printf("  %6d", size);
+
+    cusolver_potrf::launch_potrf(size, a_gpu, &cusolverH, 
+        &params, uplo, d_info, workspaceInBytesOnDevice, 
+        d_work, workspaceInBytesOnHost, h_work);
+
+    std::vector<float> a_out_host(size * size);
+    CUDA_CHECK(cudaMemcpy(
+        a_out_host.data(),
+        a_gpu,
+        size * size * sizeof(float),
+        cudaMemcpyDeviceToHost));
+
+    double mse = 0.0;
+    double ref_mean_square = 0.0;
+    for (int32_t i = 0; i < size; ++i) {
+        for (int32_t j = 0; j <= i; ++j) {
+            float diff = a_out_host[i * size + j] - c[i * size + j];
+            mse += diff * diff;
+            ref_mean_square += c[i * size + j] * c[i * size + j];
+        }
+    }
+    mse /= size * size;
+    ref_mean_square /= size * size;
+    float rmse = std::sqrt(mse);
+    float rel_rmse = rmse / std::sqrt(ref_mean_square);
+
+    printf("  %8.02e", rel_rmse);
+
+    if (rel_rmse > 1e-5) {
+        printf("  %9s  %7s", "-", "-");
+    } else {
+        // SHOULD CHANGE THIS TARGET TIME
+        double target_time_ms = 40.0;
+        double elapsed_ms = 0.0;
+        
+        elapsed_ms = benchmark_ms(
+            target_time_ms,
+            1,
+            [&]() {
+                CUDA_CHECK(cudaMemset(flush_gpu, 1, 1024*1024*64));
+            },
+            [&]() {
+                cusolver_potrf::launch_potrf(size, a_gpu, &cusolverH, 
+                    &params, uplo, d_info, workspaceInBytesOnDevice, 
+                    d_work, workspaceInBytesOnHost, h_work);
+            });
+
+        results.elapsed_ms[{size}] = elapsed_ms;
+        //double tflop = 2.0 * size_i * size_k * size_j * 1e-12;
+        printf("  %9.02f ", elapsed_ms);
+    }
+
+    printf("\n");
+
+    CUDA_CHECK(cudaFree(a_gpu));
+    CUDA_CHECK(cudaFree(flush_gpu));
+    cusolver_potrf::destroy_potrf(&cusolverH, &d_info, &d_work, &h_work);
+}
+
 template <typename Impl>
 BenchmarkResults run_all_configs(
     Phase phase,
@@ -300,7 +399,12 @@ BenchmarkResults run_all_configs(
     std::vector<BenchmarkConfig> const &configs) {
     auto results = BenchmarkResults{Impl::name};
     
-    printf("%s:\n\n", Impl::name);
+    if (phase != Phase::CUDA) {
+        printf("%s:\n\n", Impl::name);
+    } else {
+        printf("CUSOLVER POTRF:\n\n");
+    }
+
     printf(
         "  %-6s  %-8s  %-9s  %-7s\n",
         "size",
@@ -313,8 +417,16 @@ BenchmarkResults run_all_configs(
         "--------",
         "---------",
         "-------");
-    for (auto const &config : configs) {
-        run_config<Impl>(phase, data, config, results);
+        
+    if (phase != Phase::CUDA) {
+        for (auto const &config : configs) {
+            run_config<Impl>(phase, data, config, results);
+        }
+    }
+    else {
+        for (auto const &config : configs) {
+            run_config_cusolver(phase, data, config, results);
+        }
     }
     printf("\n");
     return results;
@@ -422,6 +534,8 @@ std::vector<BenchmarkResults> run_all_impls(
         results.push_back(run_all_configs<Trsm>(phase, data, configs));
     } else if (phase == Phase::ENHANCED_CHOLESKY) {
         results.push_back(run_all_configs<CholeskyEnhanced>(phase, data, configs));
+    } else {
+        results.push_back(run_all_configs<Cholesky>(phase, data, configs));
     }
     return results;
 }
@@ -464,26 +578,24 @@ int main(int argc, char **argv) {
 
     std::string test_data_dir = ".";
     auto configs = std::vector<BenchmarkConfig>{
+        {32},
         {64},
         {128},
         {512},
         {1024}
-        // {128},
-        // {256},
-        // {512},
-        // {1024},
-        // {2048},
     };
     auto data_cholesky = generate_test_data(configs, Phase::CHOLESKY);
+    run_all_impls(Phase::CUDA, data_cholesky, configs);
     run_all_impls(Phase::ENHANCED_CHOLESKY, data_cholesky, configs);
     run_all_impls(Phase::CHOLESKY, data_cholesky, configs);
     run_all_impls(Phase::CHOLESKY_SMALL, data_cholesky, configs);
     
 
-    auto data_trsm = generate_test_data(configs, Phase::TRSM);
-    run_all_impls(Phase::TRSM_SMALL, data_trsm, configs);
+    // auto data_trsm = generate_test_data(configs, Phase::TRSM);
+    // run_all_impls(Phase::TRSM_SMALL, data_trsm, configs);
     //run_all_impls(Phase::TRSM, data_trsm, configs);
-    //auto results = run_all_impls(Phase::BENCHMARK, data, configs);
+
+
 
     //can compute speedups later if needed -- XY
     // for (int32_t j = 1; j < results.size(); ++j) {
