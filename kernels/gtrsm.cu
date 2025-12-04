@@ -115,18 +115,18 @@ __forceinline__ __device__ void blockSubtract(uint32_t n, float const *A,
 template <uint32_t blocksize>
 __global__ void blockSolve_kernel(uint32_t n, uint32_t k, float const *A,
                                   float *x, float *b) {
-  uint32_t col_idx = blockDim.x;
+  uint32_t col_idx = blockIdx.x;
   float *x_col = x + col_idx * n;
-  float *b_col = x + col_idx * n;
+  float *b_col = b + col_idx * n;
   blockSolve<blocksize>(n, A, x_col, b_col);
 }
 
 template <uint32_t blocksize>
 __global__ void blockSubtract_kernel(uint32_t n, uint32_t k, float const *A,
                                      float *x, float *b) {
-  uint32_t col_idx = blockDim.x;
+  uint32_t col_idx = blockIdx.x;
   float *x_col = x + col_idx * n;
-  float *b_col = x + col_idx * n;
+  float *b_col = b + col_idx * n;
   blockSubtract<blocksize>(n, A, x_col, b_col);
 }
 
@@ -235,8 +235,8 @@ void trsmGraphLaunch(uint32_t n, uint32_t k, float const *A_d, float *b_d,
   cudaEventElapsedTime(&milliseconds, start, stop);
 
   // Copy result (x_d) back to host
-  CUDA_CHECK(
-      cudaMemcpy(h_x_result, x_d, n * sizeof(float), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(cudaMemcpy(h_x_result, x_d, n * k * sizeof(float),
+                        cudaMemcpyDeviceToHost));
 
   // Cleanup
   cudaGraphExecDestroy(graphExec);
@@ -259,9 +259,10 @@ void trsmCublasLaunch(cublasHandle_t handle, uint32_t n, uint32_t k, float *A_d,
 
   cudaEventRecord(start, 0);
 
-  CUBLAS_CHECK(cublasStrsm(handle, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER,
-                           CUBLAS_OP_N, CUBLAS_DIAG_NON_UNIT, n, k, &alpha, A_d,
-                           n, b_d, n));
+  CUBLAS_CHECK(cublasStrsm(handle, CUBLAS_SIDE_LEFT,
+                           CUBLAS_FILL_MODE_UPPER, // Read as Upper
+                           CUBLAS_OP_T,            // Transpose it
+                           CUBLAS_DIAG_NON_UNIT, n, k, &alpha, A_d, n, b_d, n));
 
   cudaEventRecord(stop, 0);
 
@@ -270,8 +271,8 @@ void trsmCublasLaunch(cublasHandle_t handle, uint32_t n, uint32_t k, float *A_d,
   float milliseconds = 0;
   cudaEventElapsedTime(&milliseconds, start, stop);
 
-  CUDA_CHECK(
-      cudaMemcpy(h_x_result, b_d, n * sizeof(float), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(cudaMemcpy(h_x_result, b_d, n * k * sizeof(float),
+                        cudaMemcpyDeviceToHost));
 
   // Cleanup
   cudaEventDestroy(start);
@@ -300,12 +301,13 @@ void verify_result(int N, int K, const std::vector<float> &X,
 
 int main() {
   const int BLOCK_SIZE = 32;
-  const int NUM_BLOCKS = 2;
+  const int NUM_BLOCKS = 32;
   const int N = BLOCK_SIZE * NUM_BLOCKS;
-  const int K = 1;
+  const int K = N;
 
   std::cout << "--- TRSM Comparison (Graph vs. cuBLAS) ---\n";
-  std::cout << "Matrix Size: " << N << "x" << N << std::endl;
+  std::cout << "A Size: " << N << "x" << N << std::endl;
+  std::cout << "X Size: " << N << "x" << K << std::endl;
   std::cout << "Block Size:  " << BLOCK_SIZE << std::endl;
 
   // 2. Host Setup
