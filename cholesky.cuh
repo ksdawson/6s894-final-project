@@ -111,7 +111,7 @@ __device__ void cholesky_XY(
     uint32_t out_col_offset, uint32_t out_row_offset) {
     
     const uint32_t dim_out = N * block_n;
-    const int32_t tile_size = 4;
+    const int32_t tile_size = 1; //(int32_t)(block_n / 32);
     float diag = 0.0f;
     float tmp = 0.0f;
     float sum_list[tile_size];

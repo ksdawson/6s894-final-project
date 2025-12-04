@@ -164,21 +164,22 @@ __device__ void trsm_transpose_kernel_XY(const uint32_t N, const uint32_t block_
   // }
   
   int32_t col_ID = threadIdx.x;
-  for (uint32_t i = 0; i < block_n; ++i) {
-
-      float sum = 0.0f;
-      //B[(B_col_offset + i) * dim + (B_row_offset + col_ID)];
-
-      for (uint32_t k = 0; k < i; ++k) {
-          sum += A[(A_col_offset + i) * dim + (A_row_offset + k)] * X[(X_col_offset + col_ID) * dim + (X_row_offset + k)];
-      }
-
-      sum = (B[(B_col_offset + i) * dim + (B_row_offset + col_ID)] - sum) / A[(A_col_offset + i) * dim + (A_row_offset + i)];
+    for (uint32_t i = 0; i < block_n; ++i) {
       if (col_ID < block_n) {
-          X[(X_col_offset + col_ID) * dim + (X_row_offset + i)] = sum;
+        float sum = 0.0f;
+        //B[(B_col_offset + i) * dim + (B_row_offset + col_ID)];
+
+        for (uint32_t k = 0; k < i; ++k) {
+            sum += A[(A_col_offset + i) * dim + (A_row_offset + k)] * X[(X_col_offset + col_ID) * dim + (X_row_offset + k)];
+        }
+
+        sum = (B[(B_col_offset + i) * dim + (B_row_offset + col_ID)] - sum) / A[(A_col_offset + i) * dim + (A_row_offset + i)];
+        if (col_ID < block_n) {
+            X[(X_col_offset + col_ID) * dim + (X_row_offset + i)] = sum;
+        }
       }
       __syncthreads();
-  }
+    }
 }
 
 // TRSM solves A * X = B 
