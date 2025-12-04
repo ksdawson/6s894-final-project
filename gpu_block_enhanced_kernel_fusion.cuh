@@ -116,13 +116,8 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
 
         // Load Ljj into smem
         float *Ljj = block_cholesky_space::get_block(L, j, j, n, m);
-        for (uint32_t idx = threadIdx.x; idx < m * m; idx += blockDim.x) {
-            const uint32_t ti = idx / m;
-            const uint32_t tj = idx % m;
-            smem3[idx] = Ljj[ti * n + tj];
-        }
+        block_cholesky_space::gmem_to_smem(Ljj, smem3, n, m);
         Ljj = smem3;
-        __syncthreads();
 
         // TRSM
         float *Lij = smem2;
@@ -131,12 +126,7 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
 
         // Write back Lij
         Lij = block_cholesky_space::get_block(L, i, j, n, m);
-        for (uint32_t idx = threadIdx.x; idx < m * m; idx += blockDim.x) {
-            const uint32_t ti = idx / m;
-            const uint32_t tj = idx % m;
-            Lij[ti * n + tj] = smem2[idx];
-        }
-        __syncthreads();
+        block_cholesky_space::smem_to_gmem(Lij, smem2, n, m);
 
         // Update Aii
         diagonal_block_update<T_TH, T_TW>(A, L, n, m, i, j, smem2);
@@ -161,11 +151,7 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
 
     // Write back Ljj (all threads participate)
     Ljj = block_cholesky_space::get_block(L, j, j, n, m);
-    for (uint32_t idx = threadIdx.x; idx < m * m; idx += blockDim.x) {
-        const uint32_t ti = idx / m;
-        const uint32_t tj = idx % m;
-        Ljj[ti * n + tj] = smem[idx];
-    }
+    block_cholesky_space::smem_to_gmem(Ljj, smem, n, m);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
