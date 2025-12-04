@@ -122,6 +122,7 @@ __device__ void block_update(const float *A, float *L,
 }
 
 template <uint32_t T_TH, uint32_t T_TW>
+__launch_bounds__(256)
 __global__ void block_kernel(const float *A, float *L, // input matrix, Chol matrix
     const uint32_t n, const uint32_t m, // matrix size, block size
     const uint32_t j // block col
@@ -144,6 +145,7 @@ __global__ void block_kernel(const float *A, float *L, // input matrix, Chol mat
 }
 
 template <uint32_t T_TH, uint32_t T_TW>
+__launch_bounds__(256)
 __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matrix
     const uint32_t n, const uint32_t m, // matrix size, block size
     const uint32_t j // block col
@@ -159,8 +161,17 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
 
     // Chol (only first warp participates)
     float *Ajj = smem;
-    float *Ljj = get_block(L, j, j, n, m);
-    cholesky_small::block_cholesky(Ajj, Ljj, m, n, m);
+    float *Ljj = smem2;
+    cholesky_small::block_cholesky(Ajj, Ljj, m, m, m);
+    __syncthreads();
+
+    // Write back Ljj (all threads participate)
+    Ljj = block_cholesky_space::get_block(L, j, j, n, m);
+    for (uint32_t idx = threadIdx.x; idx < m * m; idx += blockDim.x) {
+        const uint32_t ti = idx / m;
+        const uint32_t tj = idx % m;
+        Ljj[ti * n + tj] = smem2[idx];
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////

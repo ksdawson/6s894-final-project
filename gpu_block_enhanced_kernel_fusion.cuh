@@ -24,6 +24,8 @@ template <uint32_t T_TH, uint32_t T_TW>
 __device__ void diagonal_block_gemm_naive(float *A, float* C,
     const uint A_n, const uint32_t r
 ) {
+    // TODO: AA^T is symmetric so only need to compute lower triangle
+
     // Move to subtile
     const uint32_t tile_i = threadIdx.x / (r / T_TW);
     const uint32_t tile_j = threadIdx.x % (r / T_TW);
@@ -141,7 +143,7 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
     }
 }
 
-__launch_bounds__(32)
+__launch_bounds__(1024)
 __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matrix
     const uint32_t n, const uint32_t m, // matrix size, block size
     const uint32_t j // block col
@@ -155,6 +157,7 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
     const float *Ajj = block_cholesky_space::get_block(A, j, j, n, m);
     float *Ljj = smem;
     cholesky_small::block_cholesky(Ajj, Ljj, n, m, m);
+    __syncthreads();
 
     // Write back Ljj (all threads participate)
     Ljj = block_cholesky_space::get_block(L, j, j, n, m);
@@ -190,7 +193,7 @@ void launch_block_cholesky(
     // Iterate over block cols launching a kernel for each step
     for (uint32_t j = 0; j < n / m; ++j) {
         // Step 1: Chol diagonal block
-        chol_kernel<<<1, 32, smem_size_bytes>>>(in, out, n, m, j);
+        chol_kernel<<<1, 32*32, smem_size_bytes>>>(in, out, n, m, j);
 
         // Step 2: Trsm then update
         block_kernel<4, 4><<<48, 8*32, smem_size_bytes*3>>>(const_cast<float*>(in), out, n, m, j);
