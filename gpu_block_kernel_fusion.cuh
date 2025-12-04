@@ -182,9 +182,6 @@ __device__ void block_gemm_naive(float *A, float *B, float* C,
             }
         }
     }
-
-    // Make sure every thread is done
-    __syncthreads();
 }
 
 template <uint32_t T_TH, uint32_t T_TW>
@@ -198,6 +195,9 @@ __device__ void block_update(const float *A, float *L,
     const uint32_t tile_i = threadIdx.x / (m / T_TW);
     const uint32_t tile_j = threadIdx.x % (m / T_TW);
 
+    // Only compute if valid tile
+    const uint32_t N = m / T_TH;
+
     // Sum Lik * Ljk^T
     for (uint32_t k = 0; k < j; ++k) {
         // Load Lik, Ljk into smem
@@ -205,22 +205,28 @@ __device__ void block_update(const float *A, float *L,
         float *Ljk = get_block(L, j, k, n, m);
         gmem_to_smem(Lik, Ljk, smem1, smem2, n, m);
 
-        block_gemm_naive<T_TH, T_TW>(smem1, smem2, reg, m, m, m, tile_i, tile_j);
+        if (tile_i < N && tile_j < N) {
+            block_gemm_naive<T_TH, T_TW>(smem1, smem2, reg, m, m, m, tile_i, tile_j);
+        }
+
+        __syncthreads();
     }
 
-    // Move A to Aij 
-    const float *Aij = get_block(A, i, j, n, m);
+    if (tile_i < N && tile_j < N) {
+        // Move A to Aij 
+        const float *Aij = get_block(A, i, j, n, m);
 
-    // Move to subtile
-    const float *_Aij = Aij + tile_i * T_TH * n + tile_j * T_TW;
-    float *_Aij_p = smem1 + tile_i * T_TH * m + tile_j * T_TW;
+        // Move to subtile
+        const float *_Aij = Aij + tile_i * T_TH * n + tile_j * T_TW;
+        float *_Aij_p = smem1 + tile_i * T_TH * m + tile_j * T_TW;
 
-    // Compute Aij - sum
-    #pragma unroll
-    for (uint32_t ti = 0; ti < T_TH; ++ti) {
+        // Compute Aij - sum
         #pragma unroll
-        for (uint32_t tj = 0; tj < T_TW; ++tj) {
-            _Aij_p[ti * m + tj] = _Aij[ti * n + tj] - reg[ti * T_TW + tj];
+        for (uint32_t ti = 0; ti < T_TH; ++ti) {
+            #pragma unroll
+            for (uint32_t tj = 0; tj < T_TW; ++tj) {
+                _Aij_p[ti * m + tj] = _Aij[ti * n + tj] - reg[ti * T_TW + tj];
+            }
         }
     }
 
