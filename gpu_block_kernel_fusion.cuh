@@ -38,7 +38,7 @@ struct BlockUpdate {
 
 template <uint32_t T_TH, uint32_t T_TW>
 __device__ void block_gemm_naive(float *A, float *B, float* C,
-    const uint A_n, const uint32_t B_n, const uint32_t r
+    const uint32_t A_n, const uint32_t B_n, const uint32_t r
 ) {
     // Move to subtile
     const uint32_t tile_i = threadIdx.x / (r / T_TW);
@@ -47,12 +47,14 @@ __device__ void block_gemm_naive(float *A, float *B, float* C,
     float *_B = B + tile_j * T_TH * B_n;
 
     // Each thread handles a tile
-    #pragma unroll
-    for (uint32_t ti = 0; ti < T_TH; ++ti) {
+    for (uint32_t tk = 0; tk < r; ++tk) {
         #pragma unroll
-        for (uint32_t tj = 0; tj < T_TW; ++tj) {
-            for (uint32_t tk = 0; tk < r; ++tk) {
-                C[ti * T_TW + tj] += _A[ti * A_n + tk] * _B[tj * B_n + tk];
+        for (uint32_t ti = 0; ti < T_TH; ++ti) {
+            const uint32_t c_i_offset = ti * T_TW;
+            const float tmp = _A[ti * A_n + tk];
+            #pragma unroll
+            for (uint32_t tj = 0; tj < T_TW; ++tj) {
+                C[c_i_offset + tj] += tmp * _B[tj * B_n + tk];
             }
         }
     }
