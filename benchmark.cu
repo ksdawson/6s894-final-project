@@ -47,7 +47,8 @@ enum class Phase {
     CHOLESKY_SMALL,
     TRSM_SMALL,
     ENHANCED_CHOLESKY,
-    CUDA
+    CUSOLVER_POTRF,
+    CUBLAS_TRSM
 };
 
 struct BenchmarkResults {
@@ -392,6 +393,136 @@ void run_config_cusolver(
     cusolver_potrf::destroy_potrf(&cusolverH, &d_info, &d_work, &h_work);
 }
 
+void run_config_cublas(
+    Phase phase,
+    TestData const &data,
+    BenchmarkConfig const &config,
+    BenchmarkResults &results) {
+    auto size = config.size;
+
+    auto const &a = data.a.at({size});
+    auto const &c = data.c.at({size});
+    auto const &b = data.b.at({size});
+
+    float *a_gpu;
+    float *b_gpu;
+    CUDA_CHECK(cudaMalloc(&a_gpu, size * size * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&b_gpu, size * size * sizeof(float)));
+
+    CUDA_CHECK(cudaMemcpy(
+        a_gpu,
+        a.data(),
+        size * size * sizeof(float),
+        cudaMemcpyHostToDevice));
+
+    CUDA_CHECK(cudaMemcpy(
+        b_gpu, b.data(), 
+        size * size * sizeof(float), 
+        cudaMemcpyHostToDevice));
+    
+    cublasHandle_t handle;
+    cublasCreate(&handle);
+
+    float alpha = 1.0f;
+
+    cublasSideMode_t   side  = CUBLAS_SIDE_RIGHT;      // X * op(A) = alpha * B (for row-major AX=B)
+    cublasFillMode_t   uplo  = CUBLAS_FILL_MODE_UPPER; // cuBLAS sees upper (row-major lower)
+    cublasOperation_t  trans = CUBLAS_OP_N;            // no transpose (cuBLAS has A^T, which is what we need)
+    cublasDiagType_t   diag  = CUBLAS_DIAG_NON_UNIT;   // diagonal is not assumed to be 1
+
+    int m = size;      // rows of B
+    int k = size;      // columns of B (using k to avoid confusion with matrix dimension n)
+    int lda = size;    // leading dimension of A
+    int ldb = size;    // leading dimension of B
+
+    //need to flush gpu caches before benchmarking each run, might have to change size based on GPU
+    void *flush_gpu = nullptr;
+    CUDA_CHECK(cudaMalloc(&flush_gpu, 1024*1024*64));
+    CUDA_CHECK(cudaMemset(flush_gpu, 1, 1024*1024*64));
+
+    printf("  %6d", size);
+
+    cublasStrsm(
+        handle,
+        side,           // CUBLAS_SIDE_LEFT: op(A) * X = alpha * B
+        uplo,           // CUBLAS_FILL_MODE_UPPER (because row-major lower = col-major upper)
+        trans,          // CUBLAS_OP_T (transpose the col-major upper back to row-major lower)
+        diag,           // CUBLAS_DIAG_NON_UNIT
+        m,              // number of rows of B
+        k,              // number of columns of B
+        &alpha,         // scalar alpha
+        a_gpu,          // device pointer to A
+        lda,            // leading dimension of A
+        b_gpu,          // device pointer to B
+        ldb             // leading dimension of B
+    );
+
+    std::vector<float> c_out_host(size * size);
+    CUDA_CHECK(cudaMemcpy(
+        c_out_host.data(),
+        b_gpu,
+        size * size * sizeof(float),
+        cudaMemcpyDeviceToHost));
+
+    double mse = 0.0;
+    double ref_mean_square = 0.0;
+    for (int32_t i = 0; i < size; ++i) {
+        for (int32_t j = 0; j < size; ++j) {
+            float diff = c_out_host[j * size + i] - c[i * size + j];
+            mse += diff * diff;
+            ref_mean_square += c[i * size + j] * c[i * size + j];
+        }
+    }
+    mse /= size * size;
+    ref_mean_square /= size * size;
+    float rmse = std::sqrt(mse);
+    float rel_rmse = rmse / std::sqrt(ref_mean_square);
+
+    printf("  %8.02e", rel_rmse);
+
+    if (rel_rmse > 1e-5) {
+        printf("  %9s  %7s", "-", "-");
+    } else {
+        // SHOULD CHANGE THIS TARGET TIME
+        double target_time_ms = 40.0;
+        double elapsed_ms = 0.0;
+        
+        elapsed_ms = benchmark_ms(
+            target_time_ms,
+            1,
+            [&]() {
+                CUDA_CHECK(cudaMemset(flush_gpu, 1, 1024*1024*64));
+            },
+            [&]() {
+                cublasStrsm(
+                    handle,
+                    side,           // CUBLAS_SIDE_LEFT: op(A) * X = alpha * B
+                    uplo,           // CUBLAS_FILL_MODE_UPPER (because row-major lower = col-major upper)
+                    trans,          // CUBLAS_OP_T (transpose the col-major upper back to row-major lower)
+                    diag,           // CUBLAS_DIAG_NON_UNIT
+                    m,              // number of rows of B
+                    k,              // number of columns of B
+                    &alpha,         // scalar alpha
+                    a_gpu,          // device pointer to A
+                    lda,            // leading dimension of A
+                    b_gpu,          // device pointer to B
+                    ldb);           // leading dimension of B
+            });
+
+        results.elapsed_ms[{size}] = elapsed_ms;
+        //double tflop = 2.0 * size_i * size_k * size_j * 1e-12;
+        printf("  %9.02f ", elapsed_ms);
+    }
+
+    printf("\n");
+
+    CUDA_CHECK(cudaFree(a_gpu));
+    CUDA_CHECK(cudaFree(b_gpu));
+    CUDA_CHECK(cudaFree(flush_gpu));
+    cublasDestroy(handle);
+    
+}
+
 template <typename Impl>
 BenchmarkResults run_all_configs(
     Phase phase,
@@ -399,10 +530,12 @@ BenchmarkResults run_all_configs(
     std::vector<BenchmarkConfig> const &configs) {
     auto results = BenchmarkResults{Impl::name};
     
-    if (phase != Phase::CUDA) {
-        printf("%s:\n\n", Impl::name);
-    } else {
+    if (phase == Phase::CUSOLVER_POTRF) {
         printf("CUSOLVER POTRF:\n\n");
+    } else if (phase == Phase::CUBLAS_TRSM) {
+        printf("CUBLAS TRSM:\n\n");
+    } else {
+        printf("%s:\n\n", Impl::name);
     }
 
     printf(
@@ -417,15 +550,18 @@ BenchmarkResults run_all_configs(
         "--------",
         "---------",
         "-------");
-        
-    if (phase != Phase::CUDA) {
-        for (auto const &config : configs) {
-            run_config<Impl>(phase, data, config, results);
-        }
-    }
-    else {
+    
+    if (phase == Phase::CUSOLVER_POTRF) {
         for (auto const &config : configs) {
             run_config_cusolver(phase, data, config, results);
+        }
+    } else if (phase == Phase::CUBLAS_TRSM) {
+        for (auto const &config : configs) {
+            run_config_cublas(phase, data, config, results);
+        }
+    } else {
+        for (auto const &config : configs) {
+            run_config<Impl>(phase, data, config, results);
         }
     }
     printf("\n");
@@ -534,8 +670,10 @@ std::vector<BenchmarkResults> run_all_impls(
         results.push_back(run_all_configs<Trsm>(phase, data, configs));
     } else if (phase == Phase::ENHANCED_CHOLESKY) {
         results.push_back(run_all_configs<CholeskyEnhanced>(phase, data, configs));
-    } else {
+    } else if (phase == Phase::CUSOLVER_POTRF) {
         results.push_back(run_all_configs<Cholesky>(phase, data, configs));
+    } else if (phase == Phase::CUBLAS_TRSM) {
+        results.push_back(run_all_configs<Trsm>(phase, data, configs));
     }
     return results;
 }
@@ -585,14 +723,15 @@ int main(int argc, char **argv) {
         {1024}
     };
     auto data_cholesky = generate_test_data(configs, Phase::CHOLESKY);
-    run_all_impls(Phase::CUDA, data_cholesky, configs);
+    run_all_impls(Phase::CUSOLVER_POTRF, data_cholesky, configs);
     run_all_impls(Phase::ENHANCED_CHOLESKY, data_cholesky, configs);
     run_all_impls(Phase::CHOLESKY, data_cholesky, configs);
     run_all_impls(Phase::CHOLESKY_SMALL, data_cholesky, configs);
     
 
-    // auto data_trsm = generate_test_data(configs, Phase::TRSM);
-    // run_all_impls(Phase::TRSM_SMALL, data_trsm, configs);
+    auto data_trsm = generate_test_data(configs, Phase::TRSM);
+    run_all_impls(Phase::CUBLAS_TRSM, data_trsm, configs);
+    run_all_impls(Phase::TRSM_SMALL, data_trsm, configs);
     //run_all_impls(Phase::TRSM, data_trsm, configs);
 
 
