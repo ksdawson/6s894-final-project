@@ -22,6 +22,39 @@ size_t get_workspace_size(int32_t size) {
 __device__ float* get_block(float *A, const uint32_t i, const uint32_t j, const uint32_t n, const uint32_t m) { return A + i * m * n + j * m; }
 __device__ const float* get_block(const float *A, const uint32_t i, const uint32_t j, const uint32_t n, const uint32_t m) { return A + i * m * n + j * m; }
 
+__device__ void smem_to_gmem(float *gmem, float*smem,
+    const uint32_t gmem_w, const uint32_t smem_w
+) {
+    for (uint32_t idx = threadIdx.x; idx < smem_w * smem_w; idx += blockDim.x) {
+        const uint32_t i = idx / smem_w;
+        const uint32_t j = idx % smem_w;
+        gmem[i * gmem_w + j] = smem[idx];
+    }
+    __syncthreads();
+}
+__device__ void gmem_to_smem(float *gmem, float*smem,
+    const uint32_t gmem_w, const uint32_t smem_w
+) {
+    for (uint32_t idx = threadIdx.x; idx < smem_w * smem_w; idx += blockDim.x) {
+        const uint32_t i = idx / smem_w;
+        const uint32_t j = idx % smem_w;
+        smem[idx] = gmem[i * gmem_w + j];
+    }
+    __syncthreads();
+}
+__device__ void gmem_to_smem(float *gmem1, float *gmem2,
+    float*smem1, float*smem2,
+    const uint32_t gmem_w, const uint32_t smem_w
+) {
+    for (uint32_t idx = threadIdx.x; idx < smem_w * smem_w; idx += blockDim.x) {
+        const uint32_t i = idx / smem_w;
+        const uint32_t j = idx % smem_w;
+        smem1[idx] = gmem1[i * gmem_w + j];
+        smem2[idx] = gmem2[i * gmem_w + j];
+    }
+    __syncthreads();
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Device functions
 
@@ -88,13 +121,7 @@ __device__ void block_update(const float *A, float *L,
         // Load Lik, Ljk into smem
         float *Lik = get_block(L, i, k, n, m);
         float *Ljk = get_block(L, j, k, n, m);
-        for (uint32_t idx = threadIdx.x; idx < m * m; idx += blockDim.x) {
-            const uint32_t ti = idx / m;
-            const uint32_t tj = idx % m;
-            smem1[idx] = Lik[ti * n + tj];
-            smem2[idx] = Ljk[ti * n + tj];
-        }
-        __syncthreads();
+        gmem_to_smem(Lik, Ljk, smem1, smem2, n, m);
 
         block_gemm_naive<T_TH, T_TW>(smem1, smem2, reg, m, m, m);
     }
@@ -167,11 +194,7 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
 
     // Write back Ljj (all threads participate)
     Ljj = block_cholesky_space::get_block(L, j, j, n, m);
-    for (uint32_t idx = threadIdx.x; idx < m * m; idx += blockDim.x) {
-        const uint32_t ti = idx / m;
-        const uint32_t tj = idx % m;
-        Ljj[ti * n + tj] = smem2[idx];
-    }
+    smem_to_gmem(Ljj, smem2, n, m);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
