@@ -10,14 +10,14 @@
 #include "trsm_small.cuh"
 #include "cholesky_small.cuh"
 
-////////////////////////////////////////////////////////////////////////////////
-// Helper functions
-
 namespace block_cholesky_space {
 
 size_t get_workspace_size(int32_t size) {
     return 0;
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// Helper functions
 
 __device__ float* get_block(float *A, const uint32_t i, const uint32_t j, const uint32_t n, const uint32_t m) { return A + i * m * n + j * m; }
 __device__ const float* get_block(const float *A, const uint32_t i, const uint32_t j, const uint32_t n, const uint32_t m) { return A + i * m * n + j * m; }
@@ -25,33 +25,75 @@ __device__ const float* get_block(const float *A, const uint32_t i, const uint32
 __device__ void smem_to_gmem(float *gmem, float*smem,
     const uint32_t gmem_w, const uint32_t smem_w
 ) {
-    for (uint32_t idx = threadIdx.x; idx < smem_w * smem_w; idx += blockDim.x) {
+    // Handle vectors
+    float4 *gmem4 = reinterpret_cast<float4*>(gmem);
+    float4 *smem4 = reinterpret_cast<float4*>(smem);
+    const uint32_t gmem4_w = gmem_w / 4;
+    const uint32_t smem4_w = smem_w / 4;
+    for (uint32_t idx = threadIdx.x; idx < smem_w * smem_w / 4; idx += blockDim.x) {
+        const uint32_t i = idx / smem4_w;
+        const uint32_t j = idx % smem4_w;
+        gmem4[i * gmem4_w + j] = smem4[idx];
+    }
+
+    // Handle tail
+    for (uint32_t idx = (smem_w * smem_w / 4) * 4 + threadIdx.x; idx < smem_w * smem_w; idx += blockDim.x) {
         const uint32_t i = idx / smem_w;
         const uint32_t j = idx % smem_w;
         gmem[i * gmem_w + j] = smem[idx];
     }
+
     __syncthreads();
 }
 __device__ void gmem_to_smem(float *gmem, float*smem,
     const uint32_t gmem_w, const uint32_t smem_w
 ) {
-    for (uint32_t idx = threadIdx.x; idx < smem_w * smem_w; idx += blockDim.x) {
+    // Handle vectors
+    float4 *gmem4 = reinterpret_cast<float4*>(gmem);
+    float4 *smem4 = reinterpret_cast<float4*>(smem);
+    const uint32_t gmem4_w = gmem_w / 4;
+    const uint32_t smem4_w = smem_w / 4;
+    for (uint32_t idx = threadIdx.x; idx < smem_w * smem_w / 4; idx += blockDim.x) {
+        const uint32_t i = idx / smem4_w;
+        const uint32_t j = idx % smem4_w;
+        smem4[idx] = gmem4[i * gmem4_w + j];
+    }
+
+    // Handle tail
+    for (uint32_t idx = (smem_w * smem_w / 4) * 4 + threadIdx.x; idx < smem_w * smem_w; idx += blockDim.x) {
         const uint32_t i = idx / smem_w;
         const uint32_t j = idx % smem_w;
         smem[idx] = gmem[i * gmem_w + j];
     }
+
     __syncthreads();
 }
 __device__ void gmem_to_smem(float *gmem1, float *gmem2,
     float*smem1, float*smem2,
     const uint32_t gmem_w, const uint32_t smem_w
 ) {
-    for (uint32_t idx = threadIdx.x; idx < smem_w * smem_w; idx += blockDim.x) {
+    // Handle vectors
+    float4 *gmem1_4 = reinterpret_cast<float4*>(gmem1);
+    float4 *gmem2_4 = reinterpret_cast<float4*>(gmem2);
+    float4 *smem1_4 = reinterpret_cast<float4*>(smem1);
+    float4 *smem2_4 = reinterpret_cast<float4*>(smem2);
+    const uint32_t gmem4_w = gmem_w / 4;
+    const uint32_t smem4_w = smem_w / 4;
+    for (uint32_t idx = threadIdx.x; idx < smem_w * smem_w / 4; idx += blockDim.x) {
+        const uint32_t i = idx / smem4_w;
+        const uint32_t j = idx % smem4_w;
+        smem1_4[idx] = gmem1_4[i * gmem4_w + j];
+        smem2_4[idx] = gmem2_4[i * gmem4_w + j];
+    }
+
+    // Handle tail
+    for (uint32_t idx = (smem_w * smem_w / 4) * 4 + threadIdx.x; idx < smem_w * smem_w; idx += blockDim.x) {
         const uint32_t i = idx / smem_w;
         const uint32_t j = idx % smem_w;
         smem1[idx] = gmem1[i * gmem_w + j];
         smem2[idx] = gmem2[i * gmem_w + j];
     }
+
     __syncthreads();
 }
 
