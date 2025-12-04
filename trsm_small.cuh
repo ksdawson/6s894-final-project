@@ -116,6 +116,7 @@ __device__ void block_forward_substitution(float const *A, float *x, float const
   }
 }
 
+// no padding on A, X, B, ex. on shared memory
 __device__ void block_trsm(float const *A, float *X, float const *B,
   const uint32_t A_n, const uint32_t X_n, const uint32_t B_n,
   const uint32_t r
