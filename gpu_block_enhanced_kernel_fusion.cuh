@@ -20,9 +20,9 @@ size_t get_workspace_size(int32_t size) {
     return 0;
 }
 
-template <uint32_t T_TH, uint32_t T_TW>
+template <uint32_t m, uint32_t T_TH, uint32_t T_TW>
 __device__ void diagonal_block_update(float *A, float *L,
-    const uint32_t n, const uint32_t m,
+    const uint32_t n,
     const uint32_t i, const uint32_t j,
     float *smem
 ) {
@@ -34,10 +34,10 @@ __device__ void diagonal_block_update(float *A, float *L,
     const uint32_t tile_j = threadIdx.x - (tile_i * (tile_i + 1) / 2);
 
     // Only compute if valid tile
-    const uint32_t N = m / T_TH;
+    constexpr uint32_t N = m / T_TH;
     if (tile_i < N && tile_j < N) {
         // Compute Lij * Lij^T
-        block_cholesky_space::diagonal_block_gemm_naive<T_TH, T_TW>(smem, reg, m, m, tile_i, tile_j);
+        block_cholesky_space::diagonal_block_gemm_naive<m, m, T_TH, T_TW>(smem, reg, tile_i, tile_j);
 
         // Move A to Aii
         float *Aii = block_cholesky_space::get_block(A, i, i, n, m);
@@ -59,10 +59,10 @@ __device__ void diagonal_block_update(float *A, float *L,
     __syncthreads();
 }
 
-template <uint32_t T_TH, uint32_t T_TW>
-__launch_bounds__(1024)
+template <uint32_t m, uint32_t W, uint32_t T_TH, uint32_t T_TW>
+__launch_bounds__(W*32)
 __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
-    const uint32_t n, const uint32_t m, // matrix size, block size
+    const uint32_t n, // matrix size
     const uint32_t j // block col
 ) {
     // Setup smem
@@ -73,7 +73,7 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
     // Each SM gets a block
     for (uint32_t i = j + 1 + blockIdx.x; i < n / m; i += gridDim.x) {
         // Update
-        block_cholesky_space::block_update<T_TH, T_TW>(A, L, n, m, i, j, smem, smem2);
+        block_cholesky_space::block_update<m, T_TH, T_TW>(A, L, n, i, j, smem, smem2);
 
         // Load Ljj into smem
         float *Ljj = block_cholesky_space::get_block(L, j, j, n, m);
@@ -90,8 +90,29 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
         block_cholesky_space::smem_to_gmem(Lij, smem2, n, m);
 
         // Update Aii
-        diagonal_block_update<T_TH, T_TW>(A, L, n, m, i, j, smem2);
+        diagonal_block_update<m, T_TH, T_TW>(A, L, n, i, j, smem2);
     }
+}
+
+template <uint32_t m>
+__launch_bounds__(1024)
+__global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matrix
+    const uint32_t n, // matrix size
+    const uint32_t j // block col
+) {
+    // Only 1 SM participates
+
+    // Setup smem
+    extern __shared__ float smem[];
+
+    // Chol
+    const float *Ajj = block_cholesky_space::get_block(A, j, j, n, m);
+    float *Ljj = smem;
+    cholesky_small::block_col_cholesky(Ajj, Ljj, n, m, m);
+
+    // Write back Ljj
+    Ljj = block_cholesky_space::get_block(L, j, j, n, m);
+    block_cholesky_space::smem_to_gmem(Ljj, smem, n, m);
 }
 
 __launch_bounds__(1024)
@@ -117,21 +138,17 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
 ////////////////////////////////////////////////////////////////////////////////
 // Host functions
 
-void launch_block_cholesky(
-    const uint32_t n, float const *in, float *out, void *workspace
-) {
-    // Divide the grid into blocks
-    constexpr uint32_t m = 64;
-
+template <uint32_t m, uint32_t T_TS, uint32_t W>
+void launch_specialized_kernel(const uint32_t n, float const *in, float *out) {
     // Setup smem
     constexpr int smem_size_bytes = m * m * sizeof(float);
     cudaFuncSetAttribute(
-        chol_kernel,
+        chol_kernel<m>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
         smem_size_bytes
     );
     cudaFuncSetAttribute(
-        block_kernel<2, 2>,
+        block_kernel<m, W, T_TS, T_TS>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
         smem_size_bytes * 3 // need to store 3 blocks in smem
     );
@@ -139,10 +156,23 @@ void launch_block_cholesky(
     // Iterate over block cols launching a kernel for each step
     for (uint32_t j = 0; j < n / m; ++j) {
         // Step 1: Chol diagonal block
-        chol_kernel<<<1, 32*32, smem_size_bytes>>>(in, out, n, m, j);
+        chol_kernel<m><<<1, 32*32, smem_size_bytes>>>(in, out, n, j);
 
         // Step 2: Trsm then update
-        block_kernel<2, 2><<<48, 32*32, smem_size_bytes*3>>>(const_cast<float*>(in), out, n, m, j);
+        block_kernel<m, W, T_TS, T_TS><<<48, W*32, smem_size_bytes*3>>>(const_cast<float*>(in), out, n, j);
+    }
+}
+
+void launch_block_cholesky(
+    const uint32_t n, float const *in, float *out, void *workspace
+) {
+    // Divide the grid into blocks
+    if (n < 2048) {
+        launch_specialized_kernel<16, 1, 8>(n, in, out);
+    } else if (n < 4096) {
+        launch_specialized_kernel<32, 2, 8>(n, in, out);
+    } else {
+        launch_specialized_kernel<64, 2, 32>(n, in, out);
     }
 }
 
