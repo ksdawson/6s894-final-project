@@ -81,6 +81,32 @@ __device__ void gmem_to_smem(float *gmem, float*smem,
 
     __syncthreads();
 }
+
+__device__ void gmem_to_smem(const float *gmem, float*smem,
+    const uint32_t gmem_w, const uint32_t smem_w
+) {
+    // Handle vectors
+    const float4 *gmem4 = reinterpret_cast<const float4*>(gmem);
+    float4 *smem4 = reinterpret_cast<float4*>(smem);
+    const uint32_t gmem4_w = gmem_w / 4;
+    const uint32_t smem4_w = smem_w / 4;
+    for (uint32_t idx = threadIdx.x; idx < smem_w * smem_w / 4; idx += blockDim.x) {
+        const uint32_t i = idx / smem4_w;
+        const uint32_t j = idx % smem4_w;
+        smem4[idx] = gmem4[i * gmem4_w + j];
+    }
+
+    // Handle tail
+    for (uint32_t idx = (smem_w * smem_w / 4) * 4 + threadIdx.x; idx < smem_w * smem_w; idx += blockDim.x) {
+        const uint32_t i = idx / smem_w;
+        const uint32_t j = idx % smem_w;
+        smem[idx] = gmem[i * gmem_w + j];
+    }
+
+    __syncthreads();
+}
+
+
 __device__ void gmem_to_smem(float *gmem1, float *gmem2,
     float*smem1, float*smem2,
     const uint32_t gmem_w, const uint32_t smem_w

@@ -1,3 +1,7 @@
+// TL+ {"compile_flags": ["-lcuda", "-lcublas", "-lcusolver", "-lcudss"]}
+// TL+ {"header_files": []}
+// TL {"workspace_files": []}
+
 #include <iostream>
 #include <vector>
 #include <cuda_runtime.h>
