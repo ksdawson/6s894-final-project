@@ -324,7 +324,7 @@ int main() {
     for (int j = 0; j <= i; ++j) {
       h_A[i * N + j] = dist(gen);
       if (i == j)
-        h_A[i * N + j] += 2.0f;
+        h_A[i * N + j] += (float)N;
     }
   }
 
