@@ -369,7 +369,7 @@ void run_config(
     
     float rel_rmse = 0.0f;
     double tflops = 0.0;
-    if (phase == Phase::CHOLESKY || phase == Phase::CHOLESKY_SMALL || phase == Phase::ENHANCED_CHOLESKY) {
+    if (phase == Phase::CHOLESKY || phase == Phase::CHOLESKY_SMALL || phase == Phase::ENHANCED_CHOLESKY || phase == Phase::ENHANCED_DELUXE_CHOLESKY) {
         rel_rmse = calc_error_cholesky(c_out_host, c, size);
         tflops = tflops_cholesky(size);
     } else if (phase == Phase::TRSM_SMALL) {
@@ -787,7 +787,7 @@ struct TriblockSmall {
     constexpr static char const *name = "triblock_small";
     
     static size_t get_workspace_size(int32_t size) {
-        return triblock_small::get_workspace_size(size);
+        return triblock::get_workspace_size(size);
     }
 
     static void 
@@ -796,7 +796,9 @@ struct TriblockSmall {
         float *c,
         float *b,
         void *workspace) {
-        triblock_small::launch_triblock_small(size, a, c, workspace);
+        
+        uint32_t block_n = 64;
+        triblock::launch_triblock_small(size, block_n, a, c, workspace);
     }
 };
 
@@ -882,7 +884,6 @@ std::vector<BenchmarkResults> run_all_impls(
 
 int main(int argc, char **argv) {
 
-    std::string test_data_dir = ".";
     auto configs = std::vector<BenchmarkConfig>{
         {32, 32},
         {64, 32},
@@ -900,14 +901,23 @@ int main(int argc, char **argv) {
     run_all_impls(Phase::CHOLESKY_SMALL, data_cholesky, configs);
     
 
-    auto data_trsm = generate_test_data(configs, Phase::TRSM);
-    run_all_impls(Phase::CUBLAS_TRSM, data_trsm, configs);
-    run_all_impls(Phase::TRSM_SMALL, data_trsm, configs);
-    // run_all_impls(Phase::TRSM, data_trsm, configs);
+    // auto data_trsm = generate_test_data(configs, Phase::TRSM);
+    // run_all_impls(Phase::CUBLAS_TRSM, data_trsm, configs);
+    // run_all_impls(Phase::TRSM_SMALL, data_trsm, configs);
+    // // run_all_impls(Phase::TRSM, data_trsm, configs);
 
-    auto data_triblock = generate_test_data(configs, Phase::TRIBLOCK_SMALL);
-    run_all_impls(Phase::TRIBLOCK_SMALL, data_triblock, configs);
-    run_all_impls(Phase::CUSOLVER_POTRF, data_triblock, configs);
+    const uint32_t block_n = 64;
+    auto configs_triblock = std::vector<BenchmarkConfig>{
+        {64, block_n},
+        {128, block_n},
+        {512, block_n},
+        {1024, block_n},
+        // {2048, 32},
+        // {4096, 32}
+    };
+    auto data_triblock = generate_test_data(configs_triblock, Phase::TRIBLOCK_SMALL);
+    run_all_impls(Phase::TRIBLOCK_SMALL, data_triblock, configs_triblock);
+    run_all_impls(Phase::CUSOLVER_POTRF, data_triblock, configs_triblock);
 
     //can compute speedups later if needed -- XY
     // for (int32_t j = 1; j < results.size(); ++j) {
