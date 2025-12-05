@@ -21,9 +21,9 @@ size_t get_workspace_size(int32_t size) {
     return 0;
 }
 
-template <uint32_t T_TH, uint32_t T_TW>
+template <uint32_t m, uint32_t T_TH, uint32_t T_TW>
 __device__ void diagonal_block_update(float *A, float *L,
-    const uint32_t n, const uint32_t m,
+    const uint32_t n,
     const uint32_t i, const uint32_t j,
     float *smem1, float *smem2
 ) {
@@ -35,10 +35,10 @@ __device__ void diagonal_block_update(float *A, float *L,
     const uint32_t tile_j = threadIdx.x - (tile_i * (tile_i + 1) / 2);
 
     // Only compute if valid tile
-    const uint32_t N = m / T_TH;
+    constexpr uint32_t N = m / T_TH;
     if (tile_i < N && tile_j < N) {
         // Compute Lij * Lij^T
-        block_cholesky_space::diagonal_block_gemm_naive<T_TH, T_TW>(smem2, reg, m, m, tile_i, tile_j);
+        block_cholesky_space::diagonal_block_gemm_naive<m, m, T_TH, T_TW>(smem2, reg, tile_i, tile_j);
 
         // Move A to Aii
         float *Aii = block_cholesky_space::get_block(A, i, i, n, m);
@@ -61,10 +61,10 @@ __device__ void diagonal_block_update(float *A, float *L,
     __syncthreads();
 }
 
-template <uint32_t W, uint32_t T_TH, uint32_t T_TW>
+template <uint32_t m, uint32_t W, uint32_t T_TH, uint32_t T_TW>
 __launch_bounds__(W*32)
 __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
-    const uint32_t n, const uint32_t m, // matrix size, block size
+    const uint32_t n, // matrix size
     const uint32_t j // block col
 ) {
     // Setup smem
@@ -75,7 +75,7 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
     // Each SM gets a block
     for (uint32_t i = j + 1 + blockIdx.x; i < n / m; i += gridDim.x) {
         // Update
-        block_cholesky_space::block_update<T_TH, T_TW>(A, L, n, m, i, j, smem, smem2);
+        block_cholesky_space::block_update<m, T_TH, T_TW>(A, L, n, i, j, smem, smem2);
 
         // Load Ljj into smem
         float *Ljj = block_cholesky_space::get_block(L, j, j, n, m);
@@ -94,7 +94,7 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
         // Update Aii
         if (i == j + 1) {
             // Update Aii
-            diagonal_block_update<T_TH, T_TW>(A, L, n, m, i, j, smem, smem2);
+            diagonal_block_update<m, T_TH, T_TW>(A, L, n, i, j, smem, smem2);
             
             // Chol Aii
             float *Aii = smem;
@@ -106,7 +106,7 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
             block_cholesky_space::smem_to_gmem(Lii, smem2, n, m);
         } else {
             // Write back to A
-            alt_kernel_fusion::diagonal_block_update<T_TH, T_TW>(A, L, n, m, i, j, smem2);
+            alt_kernel_fusion::diagonal_block_update<m, T_TH, T_TW>(A, L, n, i, j, smem2);
         }
     }
 }
@@ -119,7 +119,7 @@ void launch_specialized_kernel(const uint32_t n, float const *in, float *out) {
     // Setup chol kernel smem
     constexpr int smem_size_bytes = m * m * sizeof(float);
     cudaFuncSetAttribute(
-        alt_kernel_fusion::chol_kernel,
+        alt_kernel_fusion::chol_kernel<m>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
         smem_size_bytes
     );
@@ -132,18 +132,18 @@ void launch_specialized_kernel(const uint32_t n, float const *in, float *out) {
 
     // Setup block kernel smem
     cudaFuncSetAttribute(
-        block_kernel<W, T_TS, T_TS>,
+        block_kernel<m, W, T_TS, T_TS>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
         smem_size_bytes * 3 // need to store 3 blocks in smem
     );
 
     // Chol first diagonal block
-    alt_kernel_fusion::chol_kernel<<<1, 32*32, smem_size_bytes>>>(in, out, n, m, 0);
+    alt_kernel_fusion::chol_kernel<m><<<1, 32*32, smem_size_bytes>>>(in, out, n, 0);
 
     // Iterate over block cols launching a kernel for each step
     for (uint32_t j = 0; j < n / m - 1; ++j) {
         // Trsm then update w/ first off diagonal computing next Chol diagonal block
-        block_kernel<W, T_TS, T_TS><<<48, W*32, smem_size_bytes*3>>>(const_cast<float*>(in), out, n, m, j);
+        block_kernel<m, W, T_TS, T_TS><<<48, W*32, smem_size_bytes*3>>>(const_cast<float*>(in), out, n, j);
     }
 }
 

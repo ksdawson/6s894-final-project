@@ -113,20 +113,8 @@ __device__ void gmem_to_smem(float *gmem1, float *gmem2,
 ////////////////////////////////////////////////////////////////////////////////
 // Device functions
 
-struct BlockUpdate {
-    const float *A; // input matrix
-    float *L; // Chol matrix
-    const uint32_t n; // matrix size
-    const uint32_t m; // block size
-    const uint32_t i; // Lik * Ljk^T
-    const uint32_t j;
-    float *reg; // add result to reg
-    float *smem; // use for read-only data reuse
-};
-
-template <uint32_t T_TH, uint32_t T_TW>
+template <uint32_t A_n, uint32_t r, uint32_t T_TH, uint32_t T_TW>
 __device__ void diagonal_block_gemm_naive(float *A, float* C,
-    const uint A_n, const uint32_t r,
     const uint32_t tile_i, const uint32_t tile_j
 ) {
     // Move to subtile
@@ -163,9 +151,8 @@ __device__ void diagonal_block_gemm_naive(float *A, float* C,
     }
 }
 
-template <uint32_t T_TH, uint32_t T_TW>
+template <uint32_t A_n, uint32_t B_n, uint32_t r, uint32_t T_TH, uint32_t T_TW>
 __device__ void block_gemm_naive(float *A, float *B, float* C,
-    const uint32_t A_n, const uint32_t B_n, const uint32_t r,
     const uint32_t tile_i, const uint32_t tile_j
 ) {
     // Move to subtile
@@ -197,9 +184,9 @@ __device__ void block_gemm_naive(float *A, float *B, float* C,
     }
 }
 
-template <uint32_t T_TH, uint32_t T_TW>
+template <uint32_t m, uint32_t T_TH, uint32_t T_TW>
 __device__ void block_update(const float *A, float *L,
-    const uint32_t n, const uint32_t m,
+    const uint32_t n,
     const uint32_t i, const uint32_t j,
     float *smem1, float*smem2
 ) {
@@ -209,7 +196,7 @@ __device__ void block_update(const float *A, float *L,
     const uint32_t tile_j = threadIdx.x % (m / T_TW);
 
     // Only compute if valid tile
-    const uint32_t N = m / T_TH;
+    constexpr uint32_t N = m / T_TH;
 
     // Sum Lik * Ljk^T
     for (uint32_t k = 0; k < j; ++k) {
@@ -219,7 +206,7 @@ __device__ void block_update(const float *A, float *L,
         gmem_to_smem(Lik, Ljk, smem1, smem2, n, m);
 
         if (tile_i < N && tile_j < N) {
-            block_gemm_naive<T_TH, T_TW>(smem1, smem2, reg, m, m, m, tile_i, tile_j);
+            block_gemm_naive<m, m, m, T_TH, T_TW>(smem1, smem2, reg, tile_i, tile_j);
         }
 
         __syncthreads();
@@ -247,9 +234,9 @@ __device__ void block_update(const float *A, float *L,
     __syncthreads();
 }
 
-template <uint32_t T_TH, uint32_t T_TW>
+template <uint32_t m, uint32_t T_TH, uint32_t T_TW>
 __device__ void diagonal_block_update(const float *A, float *L,
-    const uint32_t n, const uint32_t m,
+    const uint32_t n,
     const uint32_t i, const uint32_t j,
     float *smem
 ) {
@@ -261,7 +248,7 @@ __device__ void diagonal_block_update(const float *A, float *L,
     const uint32_t tile_j = threadIdx.x - (tile_i * (tile_i + 1) / 2);
 
     // Only compute if valid tile
-    const uint32_t N = m / T_TH;
+    constexpr uint32_t N = m / T_TH;
 
     // Sum Lik * Lik^T
     for (uint32_t k = 0; k < j; ++k) {
@@ -270,7 +257,7 @@ __device__ void diagonal_block_update(const float *A, float *L,
         gmem_to_smem(Lik, smem, n, m);
 
         if (tile_i < N && tile_j < N) {
-            diagonal_block_gemm_naive<T_TH, T_TW>(smem, reg, m, m, tile_i, tile_j);
+            diagonal_block_gemm_naive<m, m, T_TH, T_TW>(smem, reg, tile_i, tile_j);
         }
 
         __syncthreads();
@@ -298,10 +285,10 @@ __device__ void diagonal_block_update(const float *A, float *L,
     __syncthreads();
 }
 
-template <uint32_t W, uint32_t T_TH, uint32_t T_TW>
+template <uint32_t m, uint32_t W, uint32_t T_TH, uint32_t T_TW>
 __launch_bounds__(W*32)
 __global__ void block_kernel(const float *A, float *L, // input matrix, Chol matrix
-    const uint32_t n, const uint32_t m, // matrix size, block size
+    const uint32_t n, // matrix size
     const uint32_t j // block col
 ) {
     // Setup smem
@@ -311,7 +298,7 @@ __global__ void block_kernel(const float *A, float *L, // input matrix, Chol mat
     // Each SM gets a block
     for (uint32_t i = j + 1 + blockIdx.x; i < n / m; i += gridDim.x) {
         // Update
-        block_update<T_TH, T_TW>(A, L, n, m, i, j, smem, smem2);
+        block_update<m, T_TH, T_TW>(A, L, n, i, j, smem, smem2);
 
         // TRSM
         float *Lij = get_block(L, i, j, n, m);
@@ -321,10 +308,10 @@ __global__ void block_kernel(const float *A, float *L, // input matrix, Chol mat
     }
 }
 
-template <uint32_t W, uint32_t T_TH, uint32_t T_TW>
+template <uint32_t m, uint32_t W, uint32_t T_TH, uint32_t T_TW>
 __launch_bounds__(W*32)
 __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matrix
-    const uint32_t n, const uint32_t m, // matrix size, block size
+    const uint32_t n, // matrix size
     const uint32_t j // block col
 ) {
     // Only 1 SM participates
@@ -335,7 +322,7 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
 
     // Update (all threads participate)
     // diagonal_block_update<T_TH, T_TW>(A, L, n, m, j, j, smem);
-    block_update<T_TH, T_TW>(A, L, n, m, j, j, smem, smem2);
+    block_update<m, T_TH, T_TW>(A, L, n, j, j, smem, smem2);
 
     // Chol
     float *Ajj = smem;
@@ -355,12 +342,12 @@ void launch_specialized_kernel(const uint32_t n, float const *in, float *out) {
     // Setup smem
     constexpr int smem_size_bytes = m * m * 2 * sizeof(float); // need to store 2 blocks in smem
     cudaFuncSetAttribute(
-        chol_kernel<W, T_TS, T_TS>,
+        chol_kernel<m, W, T_TS, T_TS>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
         smem_size_bytes
     );
     cudaFuncSetAttribute(
-        block_kernel<W, T_TS, T_TS>,
+        block_kernel<m, W, T_TS, T_TS>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
         smem_size_bytes
     );
@@ -368,10 +355,10 @@ void launch_specialized_kernel(const uint32_t n, float const *in, float *out) {
     // Iterate over block cols launching a kernel for each step
     for (uint32_t j = 0; j < n / m; ++j) {
         // Step 1: Chol(update) diagonal block
-        chol_kernel<W, T_TS, T_TS><<<1, W*32, smem_size_bytes>>>(in, out, n, m, j);
+        chol_kernel<m, W, T_TS, T_TS><<<1, W*32, smem_size_bytes>>>(in, out, n, j);
 
         // Step 2: Trsm(update) all other blocks
-        block_kernel<W, T_TS, T_TS><<<48, W*32, smem_size_bytes>>>(in, out, n, m, j);
+        block_kernel<m, W, T_TS, T_TS><<<48, W*32, smem_size_bytes>>>(in, out, n, j);
     }
 }
 
