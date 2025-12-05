@@ -61,8 +61,8 @@ __device__ void diagonal_block_update(float *A, float *L,
     __syncthreads();
 }
 
-template <uint32_t T_TH, uint32_t T_TW>
-__launch_bounds__(1024)
+template <uint32_t W, uint32_t T_TH, uint32_t T_TW>
+__launch_bounds__(W*32)
 __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
     const uint32_t n, const uint32_t m, // matrix size, block size
     const uint32_t j // block col
@@ -114,12 +114,8 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
 ////////////////////////////////////////////////////////////////////////////////
 // Host functions
 
-void launch_block_cholesky(
-    const uint32_t n, float const *in, float *out, void *workspace
-) {
-    // Divide the grid into blocks
-    constexpr uint32_t m = 64;
-
+template <uint32_t m, uint32_t T_TS, uint32_t W>
+void launch_specialized_kernel(const uint32_t n, float const *in, float *out) {
     // Setup chol kernel smem
     constexpr int smem_size_bytes = m * m * sizeof(float);
     cudaFuncSetAttribute(
@@ -136,7 +132,7 @@ void launch_block_cholesky(
 
     // Setup block kernel smem
     cudaFuncSetAttribute(
-        block_kernel<2, 2>,
+        block_kernel<W, T_TS, T_TS>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
         smem_size_bytes * 3 // need to store 3 blocks in smem
     );
@@ -147,7 +143,20 @@ void launch_block_cholesky(
     // Iterate over block cols launching a kernel for each step
     for (uint32_t j = 0; j < n / m - 1; ++j) {
         // Trsm then update w/ first off diagonal computing next Chol diagonal block
-        block_kernel<2, 2><<<48, 32*32, smem_size_bytes*3>>>(const_cast<float*>(in), out, n, m, j);
+        block_kernel<W, T_TS, T_TS><<<48, W*32, smem_size_bytes*3>>>(const_cast<float*>(in), out, n, m, j);
+    }
+}
+
+void launch_block_cholesky(
+    const uint32_t n, float const *in, float *out, void *workspace
+) {
+    // Divide the grid into blocks
+    if (n < 2048) {
+        launch_specialized_kernel<16, 1, 8>(n, in, out);
+    } else if (n < 4096) {
+        launch_specialized_kernel<32, 2, 8>(n, in, out);
+    } else {
+        launch_specialized_kernel<64, 2, 32>(n, in, out);
     }
 }
 
