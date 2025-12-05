@@ -25,8 +25,8 @@ size_t get_workspace_size(int32_t size) {
     return 0;
 }
 
-template <uint32_t T_TH, uint32_t T_TW>
-__device__ void triblock_update(const float *Aii, float *smem, const uint32_t N, const uint32_t block_n, const uint32_t i) {
+template <uint32_t block_n, uint32_t T_TH, uint32_t T_TW>
+__device__ void triblock_update(const float *Aii, float *smem, const uint32_t N) {
 
     // compute A_(i,i-1) - L_(i,i-1) * L_(i,i-1)^T
     float reg[T_TH * T_TW] = {0.0f};
@@ -38,7 +38,7 @@ __device__ void triblock_update(const float *Aii, float *smem, const uint32_t N,
     // Only compute if valid tile
     const uint32_t n_valid = block_n / T_TH;
     if (tile_i < n_valid && tile_j < n_valid) {
-        block_cholesky_space::diagonal_block_gemm_naive<T_TH, T_TW>(smem, reg, block_n, block_n, tile_i, tile_j);
+        block_cholesky_space::diagonal_block_gemm_naive<block_n, block_n, T_TH, T_TW>(smem, reg, tile_i, tile_j);
     }
 
     __syncthreads();
@@ -67,8 +67,8 @@ __device__ void triblock_update(const float *Aii, float *smem, const uint32_t N,
 // N: total dimension of the matrix now!!!!!!!!! different from cholesky_trsm_combined
 // block_n: dimension of each block in triblock diagonal
 // note: currently can only handle block_n <=32, this naive version need to be optimized with better shared memory or register reuse
-template <uint32_t T_TH, uint32_t T_TW>
-__global__ void triblock_2(const uint32_t N, const uint32_t block_n, float const *in, float *out) {
+template <uint32_t block_n, uint32_t T_TH, uint32_t T_TW>
+__global__ void triblock_2(const uint32_t N, float const *in, float *out) {
     extern __shared__ float shared_mem[];
 
     float *smem1 = shared_mem;
@@ -109,7 +109,7 @@ __global__ void triblock_2(const uint32_t N, const uint32_t block_n, float const
         // gemm A_(i,i) - L_(i,i-1) * L_(i,i-1)^T
         // compute gemm and store in smem3
         A = block_cholesky_space::get_block(in, i, i, N, block_n);
-        triblock_update<T_TH, T_TW>(A, smem3, N, block_n, i);
+        triblock_update<block_n, T_TH, T_TW>(A, smem3, N);
 
 
         // cholesky L_(i,i), store in smem1
@@ -124,17 +124,17 @@ void launch_triblock_small(const uint32_t N, const uint32_t block_n, float const
     if (block_n == 32) {
         uint32_t shared_mem_size = 64*64*3 * sizeof(float);
         CUDA_CHECK(cudaFuncSetAttribute(
-            triblock_2<1, 1>,
+            triblock_2<32, 1, 1>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             shared_mem_size));
-        triblock_2<1, 1><<<1, 32 * 32, shared_mem_size>>>(N, block_n, in, out);
+        triblock_2<32, 1, 1><<<1, 32 * 32, shared_mem_size>>>(N, in, out);
     } else if (block_n == 64) {
         uint32_t shared_mem_size = 64*64*3 * sizeof(float);
         CUDA_CHECK(cudaFuncSetAttribute(
-            triblock_2<2, 2>,
+            triblock_2<64, 2, 2>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             shared_mem_size));
-        triblock_2<2, 2><<<1, 32 * 32, shared_mem_size>>>(N, block_n, in, out);
+        triblock_2<64, 2, 2><<<1, 32 * 32, shared_mem_size>>>(N, in, out);
     }
     else {
         printf("block_n not supported\n");

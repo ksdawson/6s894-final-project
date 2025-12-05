@@ -901,12 +901,12 @@ int main(int argc, char **argv) {
     run_all_impls(Phase::CHOLESKY_SMALL, data_cholesky, configs);
     
 
-    // auto data_trsm = generate_test_data(configs, Phase::TRSM);
-    // run_all_impls(Phase::CUBLAS_TRSM, data_trsm, configs);
-    // run_all_impls(Phase::TRSM_SMALL, data_trsm, configs);
-    // // run_all_impls(Phase::TRSM, data_trsm, configs);
+    auto data_trsm = generate_test_data(configs, Phase::TRSM);
+    run_all_impls(Phase::CUBLAS_TRSM, data_trsm, configs);
+    run_all_impls(Phase::TRSM_SMALL, data_trsm, configs);
+    // run_all_impls(Phase::TRSM, data_trsm, configs);
 
-    const uint32_t block_n = 64;
+    const uint32_t block_n = 32;
     auto configs_triblock = std::vector<BenchmarkConfig>{
         {64, block_n},
         {128, block_n},
