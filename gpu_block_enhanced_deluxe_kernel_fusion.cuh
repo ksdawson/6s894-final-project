@@ -156,7 +156,7 @@ void launch_block_cholesky(
     } else if (n < 4096) {
         launch_specialized_kernel<32, 2, 8>(n, in, out);
     } else {
-        launch_specialized_kernel<64, 2, 32>(n, in, out);
+        launch_specialized_kernel<64, 4, 8>(n, in, out);
     }
 }
 

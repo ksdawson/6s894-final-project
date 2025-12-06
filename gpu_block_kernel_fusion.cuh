@@ -388,16 +388,65 @@ void launch_specialized_kernel(const uint32_t n, float const *in, float *out) {
     }
 }
 
+template <uint32_t m, uint32_t T_TS, uint32_t W>
+void launch_specialized_kernel_dynamic_block(const uint32_t n, float const *in, float *out,
+    const uint32_t start_j, const uint32_t end_j
+) {
+    // Setup smem
+    constexpr int smem_size_bytes = m * m * 2 * sizeof(float); // need to store 2 blocks in smem
+    cudaFuncSetAttribute(
+        chol_kernel<m, W, T_TS, T_TS>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        smem_size_bytes
+    );
+    cudaFuncSetAttribute(
+        block_kernel<m, W, T_TS, T_TS>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        smem_size_bytes
+    );
+
+    // Iterate over block cols launching a kernel for each step
+    for (uint32_t j = start_j; j < end_j; ++j) {
+        // Step 1: Chol(update) diagonal block
+        chol_kernel<m, W, T_TS, T_TS><<<1, W*32, smem_size_bytes>>>(in, out, n, j);
+
+        // Step 2: Trsm(update) all other blocks
+        block_kernel<m, W, T_TS, T_TS><<<48, W*32, smem_size_bytes>>>(in, out, n, j);
+    }
+}
+
 void launch_block_cholesky(
     const uint32_t n, float const *in, float *out, void *workspace
 ) {
     // Divide the grid into blocks
-    if (n < 2048) {
-        launch_specialized_kernel<16, 1, 8>(n, in, out);
-    } else if (n < 4096) {
-        launch_specialized_kernel<32, 2, 8>(n, in, out);
+    // if (n < 2048) {
+    //     launch_specialized_kernel<16, 1, 8>(n, in, out);
+    // } else if (n < 4096) {
+    //     launch_specialized_kernel<32, 2, 8>(n, in, out);
+    // } else {
+    //     launch_specialized_kernel<64, 4, 8>(n, in, out);
+    // }
+
+    // Find an m >= 16 that makes n/m = 64
+    uint32_t _n = n;
+    uint32_t _m = 64;
+    while (64 > _n / _m && _m >= 16) {
+        _m /= 2;
+    }
+    if (_m < 16) {
+        _m = 16;
+    }
+
+    // Every time n halves, halve m until m = 16
+    if (_m == 64) {
+        launch_specialized_kernel_dynamic_block<64, 4, 8>(n, in, out, 0, (n/2)/64);
+        launch_specialized_kernel_dynamic_block<32, 2, 8>(n, in, out, (n/2)/32, (3*n/4)/32);
+        launch_specialized_kernel_dynamic_block<16, 1, 8>(n, in, out, (3*n/4)/16, n/16);
+    } else if (_m == 32) {
+        launch_specialized_kernel_dynamic_block<32, 2, 8>(n, in, out, 0, (n/2)/32);
+        launch_specialized_kernel_dynamic_block<16, 1, 8>(n, in, out, (n/2)/16, n/16);
     } else {
-        launch_specialized_kernel<64, 2, 32>(n, in, out);
+        launch_specialized_kernel<16, 1, 8>(n, in, out);
     }
 }
 
