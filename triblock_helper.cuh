@@ -103,6 +103,33 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
     }
 }
 
+template <uint32_t m>
+__launch_bounds__(1024)
+__global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matrix
+    const uint32_t n, // padding
+    const uint32_t j // block col
+) {
+    // Only 1 SM participates
+
+    // Setup smem
+    extern __shared__ float smem[];
+    float *smem1 = smem;
+    float *smem2 = smem + m * m;
+
+    // store Ajj into smem1
+    const float *Ajj = block_cholesky_space::get_block(A, j, j, n, m);
+    float *Ajj_smem = smem1;
+    block_cholesky_space::gmem_to_smem(Ajj, Ajj_smem, n, m);
+
+    // Chol
+    float *Ljj = smem2;
+    cholesky_small::block_col_cholesky(Ajj_smem, Ljj, m, m, m);
+
+    // Write back Ljj
+    Ljj = block_cholesky_space::get_block(L, j, j, n, m);
+    block_cholesky_space::smem_to_gmem(Ljj, smem2, n, m);
+}
+
 template <uint32_t m, uint32_t W, uint32_t T_TS, uint32_t T_TW>
 void triblock_block_cholesky(TB tb, const uint32_t bi, const uint32_t smem_size_bytes) {
     const float *in = tb.in;

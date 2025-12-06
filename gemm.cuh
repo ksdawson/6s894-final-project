@@ -117,34 +117,177 @@ __device__ void block_gemm (BlockUpdate gemm_info, const uint32_t k, float *shar
     __syncthreads();
 }
 
-// T_TH: tile size of each thread
-// num_threads_H: number of threads per row/column in the GPU block
-// X: input matrix, to perform X*X^T
-// smem: shared memory to store X for computation
-// reg: register array to store results of X*X^T
-// N: matrix size, determines padding
-// block_n: block size of triblock, determines loop condition
-template <uint32_t T_TH, uint32_t num_threads_H> 
-__device__ void triblock_diag_gemm_GPUblock(float *X_rows_i, float *X_rows_j, 
-    float *smem1, float *smem2, float *reg, 
-    const int32_t thread_tile_i, const int32_t thread_tile_j,
+template <uint32_t A_n, uint32_t B_n, uint32_t r, uint32_t T_TH, uint32_t T_TW>
+__device__ void diagonal_block_gemm_naive(float *A, float *B, float *C,
+    const uint32_t tile_i, const uint32_t tile_j
+) {
+    // Move to subtile
+    float *_A = A + tile_i * T_TH * A_n;
+    float *_B = B + tile_j * T_TH * B_n;
+
+    // Each thread handles a tile
+    for (uint32_t tk = 0; tk < r; tk += 4) {
+        #pragma unroll
+        for (uint32_t ti = 0; ti < T_TH; ++ti) {
+            const float4 a = *(reinterpret_cast<float4*>(_A + ti * A_n + tk));
+            #pragma unroll
+            for (uint32_t tj = 0; tj < (tile_i == tile_j ? ti+1 : T_TW); ++tj) {
+                if ((_A + ti * A_n + tk) == (_B + tj * B_n + tk)) {
+                    // If i==j reuse a
+                    C[ti * T_TW + tj] += (a.x * a.x + a.y * a.y + a.z * a.z + a.w * a.w);
+                    continue;
+                }
+                const float4 b = *(reinterpret_cast<float4*>(_B + tj * B_n + tk));
+                C[ti * T_TW + tj] += (a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w);
+            }
+        }
+    }
+    // Handle tail
+    for (uint32_t tk = (r / 4) * 4; tk < r; ++tk) {
+        #pragma unroll
+        for (uint32_t ti = 0; ti < T_TH; ++ti) {
+            const float a = _A[ti * A_n + tk];
+            #pragma unroll
+            for (uint32_t tj = 0; tj < (tile_i == tile_j ? ti+1 : T_TW); ++tj) {
+                C[ti * T_TW + tj] += a * _B[tj * B_n + tk];
+            }
+        }
+    }
+}
+
+template <uint32_t A_n, uint32_t B_n, uint32_t T_TH, uint32_t T_TW>
+__device__ void block_gemm_naive(float *A, float *B, float* C,
+    const uint32_t tile_i, const uint32_t tile_j, const uint32_t r
+) {
+    // Move to subtile
+    float *_A = A + tile_i * T_TH * A_n;
+    float *_B = B + tile_j * T_TH * B_n;
+
+    // Each thread handles a tile
+    for (uint32_t tk = 0; tk < r; tk += 4) {
+        #pragma unroll
+        for (uint32_t ti = 0; ti < T_TH; ++ti) {
+            const float4 a = *(reinterpret_cast<float4*>(_A + ti * A_n + tk));
+            #pragma unroll
+            for (uint32_t tj = 0; tj < T_TW; ++tj) {
+                const float4 b = *(reinterpret_cast<float4*>(_B + tj * B_n + tk));
+                C[ti * T_TW + tj] += (a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w);
+            }
+        }
+    }
+    // Handle tail
+    for (uint32_t tk = (r / 4) * 4; tk < r; ++tk) {
+        #pragma unroll
+        for (uint32_t ti = 0; ti < T_TH; ++ti) {
+            const float a = _A[ti * A_n + tk];
+            #pragma unroll
+            for (uint32_t tj = 0; tj < T_TW; ++tj) {
+                C[ti * T_TW + tj] += a * _B[tj * B_n + tk];
+            }
+        }
+    }
+}
+
+
+template <uint32_t T_TH, uint32_t num_threads_H>
+__device__ void triblock_gemm_GPUblock(float *X, float *A, float *smem1, float *smem2, float *reg,
+    const uint32_t block_tile_i, const uint32_t block_tile_j,
     const uint32_t N, const uint32_t block_n) {
     
-    for (uint32_t k = 0; k < block_n; k += T_TH * num_threads_H) {
+    // calculate thread tile indices
+    const uint32_t thread_tile_i = threadIdx.x / num_threads_H;
+    const uint32_t thread_tile_j = threadIdx.x % num_threads_H;
 
-        // copy X to smem
-        block_cholesky_space::gmem_to_smem(X_rows_i + k, smem1, N, T_TH * num_threads_H);
-        block_cholesky_space::gmem_to_smem(X_rows_j + k, smem2, N, T_TH * num_threads_H);
+    const bool diagonal_write = (block_tile_i == block_tile_j) && (thread_tile_i == thread_tile_j);
+
+    const uint32_t valid_tiles = block_n / (T_TH * num_threads_H);
+    if (block_tile_i < valid_tiles && block_tile_j < valid_tiles) {
+
+        // locate X for tile_i, tile_j
+        float *X_i = X + block_tile_i * (T_TH * num_threads_H) * N;
+        float *X_j = X + block_tile_j * (T_TH * num_threads_H) * N;
+        float *A_ij = A + block_tile_i * (T_TH * num_threads_H) * N + block_tile_j * (T_TH * num_threads_H);
+
+        // solve X * X^T and store in reg iteratively in the k dimension
+        for (uint32_t k = 0; k < block_n; k += T_TH * num_threads_H) {
+
+            // copy X to smem
+            block_cholesky_space::gmem_to_smem(X_i + k, smem1, N, T_TH * num_threads_H);
+            block_cholesky_space::gmem_to_smem(X_j + k, smem2, N, T_TH * num_threads_H);
+            __syncthreads();
+
+            // X is a dense off-diagonal block, so we need to sum over all k
+            constexpr uint32_t tile_size = T_TH * num_threads_H;
+            block_cholesky_space::block_gemm_naive<tile_size, tile_size, tile_size, T_TH, T_TH>(
+                smem1, smem2, reg, thread_tile_i, thread_tile_j);
+            __syncthreads();
+        }
+
+        // move to sub tile in a GPU block
+        float *A_subtile = A_ij + thread_tile_i * T_TH * N + thread_tile_j * T_TH;
+
+        // calculate A - X * X^T 
+        #pragma unroll
+        for (uint32_t ti = 0; ti < T_TH; ++ti) {
+            #pragma unroll
+            for (uint32_t tj = 0; tj < (diagonal_write ? ti+1 : T_TH); ++tj) {
+                A_subtile[ti * N + tj] -= reg[ti * T_TH + tj];
+            }
+        }
         __syncthreads();
+    }
+}
 
-        // solve X * X^T
-        // if (tile_i == tile_j) {
-        //     diag_block_gemm_naive<T_TH, T_TW>(smem, reg, tile_i, tile_j);
-        // } else {
-        //     block_gemm_naive<T_TH, T_TW>(smem, reg, tile_i, tile_j);
-        // }
-        block_cholesky_space::block_gemm_naive<T_TH * num_threads_H, T_TH * num_threads_H, T_TH * num_threads_H, T_TH, T_TH>(
-            smem1, smem2, reg, thread_tile_i, thread_tile_j);
+template <uint32_t T_TH, uint32_t num_threads_H>
+__device__ void triblock_diag_gemm_GPUblock(float *X, float *A,float *smem1, float *smem2, float *reg,
+    const uint32_t block_tile_i, const uint32_t block_tile_j,
+    const uint32_t N, const uint32_t block_n) {
+
+    // calculate thread tile indices (triangular mapping)
+    const uint32_t thread_tile_i = (uint32_t)((sqrtf(8.f * threadIdx.x + 1.f) - 1.f) * 0.5f);
+    const uint32_t thread_tile_j = threadIdx.x - (thread_tile_i * (thread_tile_i + 1) / 2);
+
+    // Check if this thread has a valid triangular tile
+    const bool valid_thread_tile = (thread_tile_i < num_threads_H);
+
+    const uint32_t valid_tiles = block_n / (T_TH * num_threads_H);
+    if (block_tile_i < valid_tiles && block_tile_j < valid_tiles) {
+
+        // locate X for tile_i, tile_j
+        float *X_i = X + block_tile_i * (T_TH * num_threads_H) * N;
+        float *X_j = X + block_tile_j * (T_TH * num_threads_H) * N;
+        float *A_ij = A + block_tile_i * (T_TH * num_threads_H) * N + block_tile_j * (T_TH * num_threads_H);
+
+        // solve X * X^T and store in reg iteratively in the k dimension
+        for (uint32_t k = 0; k < block_n; k += T_TH * num_threads_H) {
+
+            // copy X to smem (all threads participate)
+            block_cholesky_space::gmem_to_smem(X_i + k, smem1, N, T_TH * num_threads_H);
+            block_cholesky_space::gmem_to_smem(X_j + k, smem2, N, T_TH * num_threads_H);
+            __syncthreads();
+    
+            // Only threads with valid triangular tiles do computation
+            if (valid_thread_tile) {
+                gemm::diagonal_block_gemm_naive<T_TH * num_threads_H, T_TH * num_threads_H, T_TH * num_threads_H, T_TH, T_TH>(
+                    smem1, smem2, reg, thread_tile_i, thread_tile_j);
+            }
+            __syncthreads();
+        }
+
+        // Only threads with valid triangular tiles write back
+        if (valid_thread_tile) {
+            // move to sub tile in a GPU block
+            float *A_subtile = A_ij + thread_tile_i * T_TH * N + thread_tile_j * T_TH;
+
+            // calculate A - X * X^T 
+            #pragma unroll
+            for (uint32_t ti = 0; ti < T_TH; ++ti) {
+                #pragma unroll
+                for (uint32_t tj = 0; tj < (thread_tile_i == thread_tile_j ? ti+1 : T_TH); ++tj) {
+                    A_subtile[ti * N + tj] -= reg[ti * T_TH + tj];
+                }
+            }
+        }
         __syncthreads();
     }
 }
@@ -160,138 +303,19 @@ __global__ void triblock_diagonal_gemm(float *A, float *X, const uint32_t N, con
     const uint32_t block_tile_i = (uint32_t)((sqrtf(8.f * blockIdx.x + 1.f) - 1.f) * 0.5f);
     const uint32_t block_tile_j = blockIdx.x - (block_tile_i * (block_tile_i + 1) / 2);
 
-    // calculate thread tile indices
-    const uint32_t thread_tile_i = threadIdx.x / num_threads_H;
-    const uint32_t thread_tile_j = threadIdx.x % num_threads_H;
     float *smem1 = smem;
-    float *smem2 = smem1 + smem_size_bytes/(2*sizeof(float));
+    float *smem2 = smem + smem_size_bytes / (2 * sizeof(float));
 
-    const uint32_t valid_tiles = block_n / (T_TH * num_threads_H);
-    if (block_tile_i < valid_tiles && block_tile_j < valid_tiles) {
+    triblock_gemm_GPUblock<T_TH, num_threads_H>(X, A, smem1, smem2, reg, block_tile_i, block_tile_j, N, block_n);
 
-        // locate X for tile_i, tile_j
-        float *X_i = X + block_tile_i * (T_TH * num_threads_H) * N;
-        float *X_j = X + block_tile_j * (T_TH * num_threads_H) * N;
-        float *A_ij = A + block_tile_i * (T_TH * num_threads_H) * N + block_tile_j * (T_TH * num_threads_H);
+    // if (block_tile_i == block_tile_j) {
+    //     //triblock_diag_gemm_GPUblock<T_TH, num_threads_H>(X, A, smem1, smem2, reg, block_tile_i, block_tile_j, N, block_n);
+    //     triblock_gemm_GPUblock<T_TH, num_threads_H>(X, A, smem1, smem2, reg, block_tile_i, block_tile_j, N, block_n);
 
-        // solve X * X^T and store in reg iteratively in the k dimension
-        triblock_diag_gemm_GPUblock<T_TH, num_threads_H>(
-            X_i, X_j, smem1, smem2, reg, thread_tile_i, thread_tile_j, N, block_n);
-    
-        // when tile_i == tile_j, solve using diag_block_gemm_naive
-        // when tile_i != tile_j, solve using block_gemm_naive
-        // do later
-
-        // move to sub tile in a GPU block
-
-        float *A_subtile = A_ij + thread_tile_i * T_TH * N + thread_tile_j * T_TH;
-
-        // calculate A - X * X^T 
-        #pragma unroll
-        for (uint32_t ti = 0; ti < T_TH; ++ti) {
-            #pragma unroll
-            for (uint32_t tj = 0; tj < T_TH; ++tj) {
-                A_subtile[ti * N + tj] -= reg[ti * T_TH + tj];
-            }
-        }
-        __syncthreads();
-    }
+    // } else {
+    //     triblock_gemm_GPUblock<T_TH, num_threads_H>(X, A, smem1, smem2, reg, block_tile_i, block_tile_j, N, block_n);
+    // }
 }
-
-// // T_TH: tile size of each thread
-// // num_threads_H: number of threads per row/column in the GPU block
-// // X: input matrix, to perform X*X^T
-// // smem: shared memory to store X for computation
-// // reg: register array to store results of X*X^T
-// // N: matrix size, determines padding
-// // block_n: block size of triblock, determines loop condition
-// template <uint32_t T_TH, uint32_t num_threads_H> 
-// __device__ void triblock_gemm_GPUblock(float *X_rows_i, float *X_rows_j, 
-//     float *smem1, float *smem2, float *reg, 
-//     const int32_t thread_tile_i, const int32_t thread_tile_j,
-//     const uint32_t N, const uint32_t block_n) {
-    
-//     for (uint32_t k = 0; k < block_n; k += T_TH * num_threads_H) {
-
-//         // copy X to smem
-//         block_cholesky_space::gmem_to_smem(X_rows_i + k, smem1, N, T_TH * num_threads_H);
-//         block_cholesky_space::gmem_to_smem(X_rows_j + k, smem2, N, T_TH * num_threads_H);
-//         __syncthreads();
-
-//         // solve X * X^T
-//         // if (tile_i == tile_j) {
-//         //     diag_block_gemm_naive<T_TH, T_TW>(smem, reg, tile_i, tile_j);
-//         // } else {
-//         //     block_gemm_naive<T_TH, T_TW>(smem, reg, tile_i, tile_j);
-//         // }
-//         block_cholesky_space::block_gemm_naive<T_TH * num_threads_H, T_TH * num_threads_H, T_TH * num_threads_H, T_TH, T_TH>(
-//             smem1, smem2, reg, thread_tile_i, thread_tile_j);
-//         __syncthreads();
-//     }
-// }
-
-// template <uint32_t T_TH, uint32_t num_threads_H>
-// __device__ void triblock_gemm_GPUblock(float *X, float *A,float *smem1, float *smem2, float *reg,
-//     const uint32_t block_tile_i, const uint32_t block_tile_j,
-//     const uint32_t N, const uint32_t block_n) {
-
-//     // calculate thread tile indices
-//     const uint32_t thread_tile_i = threadIdx.x / num_threads_H;
-//     const uint32_t thread_tile_j = threadIdx.x % num_threads_H;
-
-//     const uint32_t valid_tiles = block_n / (T_TH * num_threads_H);
-//     if (block_tile_i < valid_tiles && block_tile_j < valid_tiles) {
-
-//         // locate X for tile_i, tile_j
-//         float *X_i = X + block_tile_i * (T_TH * num_threads_H) * N;
-//         float *X_j = X + block_tile_j * (T_TH * num_threads_H) * N;
-//         float *A_ij = A + block_tile_i * (T_TH * num_threads_H) * N + block_tile_j * (T_TH * num_threads_H);
-
-//         // solve X * X^T and store in reg iteratively in the k dimension
-//         for (uint32_t k = 0; k < block_n; k += T_TH * num_threads_H) {
-
-//             // copy X to smem
-//             block_cholesky_space::gmem_to_smem(X_i + k, smem1, N, T_TH * num_threads_H);
-//             block_cholesky_space::gmem_to_smem(X_j + k, smem2, N, T_TH * num_threads_H);
-//             __syncthreads();
-    
-//             block_cholesky_space::block_gemm_naive<T_TH * num_threads_H, T_TH * num_threads_H, T_TH * num_threads_H, T_TH, T_TH>(
-//                 smem1, smem2, reg, thread_tile_i, thread_tile_j);
-//             __syncthreads();
-//         }
-
-//         // move to sub tile in a GPU block
-//         float *A_subtile = A_ij + thread_tile_i * T_TH * N + thread_tile_j * T_TH;
-
-//         // calculate A - X * X^T 
-//         #pragma unroll
-//         for (uint32_t ti = 0; ti < T_TH; ++ti) {
-//             #pragma unroll
-//             for (uint32_t tj = 0; tj < T_TH; ++tj) {
-//                 A_subtile[ti * N + tj] -= reg[ti * T_TH + tj];
-//             }
-//         }
-//         __syncthreads();
-//     }
-// }
-
-// // requires shared memory of size at least (T_TH * num_threads_H)^2
-// template <uint32_t T_TH, uint32_t num_threads_H>
-// __global__ void triblock_diagonal_gemm(float *A, float *X, const uint32_t N, const uint32_t block_n, const uint32_t smem_size_bytes) {
-//     extern __shared__ float smem[];
-
-//     float reg[T_TH * T_TH] = {0.0f};
-
-//     // Map rectangular to triangular tiles
-//     const uint32_t block_tile_i = (uint32_t)((sqrtf(8.f * blockIdx.x + 1.f) - 1.f) * 0.5f);
-//     const uint32_t block_tile_j = blockIdx.x - (block_tile_i * (block_tile_i + 1) / 2);
-
-//     if (block_tile_i == block_tile_j) {
-//         triblock_gemm_GPUblock<T_TH, num_threads_H>(X, A, smem1, smem2, reg, block_tile_i, block_tile_j, N, block_n);
-//     } else {
-//         triblock_diag_gemm_GPUblock<T_TH, num_threads_H>(X, A, smem1, smem2, reg, block_tile_i, block_tile_j, N, block_n);
-//     }
-// }
 
 
 

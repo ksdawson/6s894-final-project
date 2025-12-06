@@ -92,9 +92,9 @@ benchmark_ms(double target_time_ms, int32_t num_iters_inner, Reset &&reset, F &&
 }
 
 struct TestData {
-    std::map<std::tuple<int32_t>, std::vector<float>> a;
-    std::map<std::tuple<int32_t>, std::vector<float>> b;
-    std::map<std::tuple<int32_t>, std::vector<float>> c;
+    std::map<std::tuple<int32_t, int32_t>, std::vector<float>> a;
+    std::map<std::tuple<int32_t, int32_t>, std::vector<float>> b;
+    std::map<std::tuple<int32_t, int32_t>, std::vector<float>> c;
 };
 
 std::vector<float> generate_random_matrix(int32_t size) {
@@ -176,21 +176,24 @@ TestData generate_test_data(
     std::vector<BenchmarkConfig> const &configs,
     Phase phase) {
     auto data = TestData{};
+    
     for (auto const &config : configs) {
         if (phase == Phase::CHOLESKY || phase == Phase::CHOLESKY_SMALL || phase == Phase::ENHANCED_CHOLESKY || phase == Phase::ENHANCED_DELUXE_CHOLESKY) {
             auto size = config.size;
-            data.c[{size}] = generate_lower_triangular_matrix(size);
-            data.a[{size}] = chol_generate(data.c[{size}], size);
+            auto block_size = config.block_size;
+            data.c[{size, block_size}] = generate_lower_triangular_matrix(size);
+            data.a[{size, block_size}] = chol_generate(data.c[{size, block_size}], size);
         } else if (phase == Phase::TRSM || phase == Phase::TRSM_SMALL) {
             auto size = config.size;
-            data.a[{size}] = generate_lower_triangular_matrix(size);
-            data.c[{size}] = generate_random_matrix(size);
-            data.b[{size}] = trsm_generate(data.a[{size}], data.c[{size}], size);
-        } else if (phase == Phase::TRIBLOCK_SMALL) {
-            auto size = config.size;
             auto block_size = config.block_size;
-            data.c[{size}] = generate_lower_triblock_matrix(size, block_size);
-            data.a[{size}] = chol_generate(data.c[{size}], size);
+            data.a[{size, block_size}] = generate_lower_triangular_matrix(size);
+            data.c[{size, block_size}] = generate_random_matrix(size);
+            data.b[{size, block_size}] = trsm_generate(data.a[{size, block_size}], data.c[{size, block_size}], size);
+        } else if (phase == Phase::TRIBLOCK_SMALL) { 
+            auto size = config.size;
+            auto block_size = config.block_size;           
+            data.c[{size, block_size}] = generate_lower_triblock_matrix(size, block_size);
+            data.a[{size, block_size}] = chol_generate(data.c[{size, block_size}], size);
         }
     }
     return data;
@@ -318,8 +321,8 @@ void run_config(
     auto size = config.size;
     auto block_size = config.block_size;
 
-    auto const &a = data.a.at({size});
-    auto const &c = data.c.at({size});
+    auto const &a = data.a.at({size, block_size});
+    auto const &c = data.c.at({size, block_size});
 
     float *a_gpu;
     float *c_gpu;
@@ -351,7 +354,7 @@ void run_config(
     printf("  %6d  %6d", size, block_size);
 
     if (phase == Phase::TRSM || phase == Phase::TRSM_SMALL) {
-        auto const &b = data.b.at({size});
+        auto const &b = data.b.at({size, block_size});
         CUDA_CHECK(cudaMemcpy(b_gpu, b.data(), size * size * sizeof(float), cudaMemcpyHostToDevice));
     }
     Impl::run(size, block_size, a_gpu, c_gpu, b_gpu, workspace_gpu);
@@ -436,8 +439,8 @@ void run_config_cusolver(
     auto size = config.size;
     auto block_size = config.block_size;
 
-    auto const &a = data.a.at({size});
-    auto const &c = data.c.at({size});
+    auto const &a = data.a.at({size, block_size});
+    auto const &c = data.c.at({size, block_size});
 
     float *a_gpu;
     CUDA_CHECK(cudaMalloc(&a_gpu, size * size * sizeof(float)));
@@ -541,9 +544,9 @@ void run_config_cublas(
     auto size = config.size;
     auto block_size = config.block_size;
 
-    auto const &a = data.a.at({size});
-    auto const &c = data.c.at({size});
-    auto const &b = data.b.at({size});
+    auto const &a = data.a.at({size, block_size});
+    auto const &c = data.c.at({size, block_size});
+    auto const &b = data.b.at({size, block_size});
 
     float *a_gpu;
     float *b_gpu;
@@ -957,8 +960,8 @@ int main(int argc, char **argv) {
     auto data_triblock = generate_test_data(configs_triblock, Phase::TRIBLOCK_SMALL);
     //run_all_impls(Phase::TRIBLOCK_SMALL, data_triblock, configs_triblock);
     run_all_impls(Phase::TRIBLOCK, data_triblock, configs_triblock);
-    run_all_impls(Phase::CUSOLVER_POTRF, data_triblock, configs_triblock);
-    run_all_impls(Phase::ENHANCED_DELUXE_CHOLESKY, data_triblock, configs_triblock);
+    // run_all_impls(Phase::CUSOLVER_POTRF, data_triblock, configs_triblock);
+    // run_all_impls(Phase::ENHANCED_DELUXE_CHOLESKY, data_triblock, configs_triblock);
 
     //can compute speedups later if needed -- XY
     // for (int32_t j = 1; j < results.size(); ++j) {

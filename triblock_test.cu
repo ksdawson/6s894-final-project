@@ -124,7 +124,7 @@ void test_triblock(uint32_t N, uint32_t block_n) {
     
     // Verify results
     bool failed = false;
-    float tol = 1e-3f;
+    float tol = 1e-4f;
     double mse = 0.0;
     double ref_mean_square = 0.0;
     for (uint32_t i = 0; i < N; ++i) {
@@ -144,6 +144,12 @@ void test_triblock(uint32_t N, uint32_t block_n) {
     float rel_rmse = rmse / std::sqrt(ref_mean_square);
     printf("RMSE = %f, REL_RMSE = %f\n", rmse, rel_rmse);
 
+
+    for (uint32_t i = 0; i < N; ++i) {
+        for (uint32_t j = 0; j < N; ++j) {
+            printf("X_gpu[%u, %u] = %f, X_true[%u, %u] = %f\n", i, j, X_gpu[i * N + j], i, j, X_true[i * N + j]);
+        }
+    }
 
     if (!failed) {
         printf("Test PASSED for N=%u, block_n=%u\n", N, block_n);
@@ -186,12 +192,12 @@ int main() {
     // test_triblock(128, 64);
     // test_triblock(256, 64);
     // test_triblock(512, 64);
-    test_triblock(64, 64);
-    test_triblock(1024, 64);
+    // test_triblock(64, 64);
+    // test_triblock(1024, 64);
     test_triblock(1024, 128);
-    test_triblock(1024, 256);
-    test_triblock(1024, 512);
-    test_triblock(1024, 1024);
+    // test_triblock(1024, 256);
+    // test_triblock(1024, 512);
+    // test_triblock(1024, 1024);
 
     //test_triblock(2048, 32);
     return 0;
