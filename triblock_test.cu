@@ -1,6 +1,6 @@
 
 // TL+ {"compile_flags": ["-lcuda"]}
-// TL+ {"header_files": ["utils.cuh", "trsm_small.cuh", "cholesky.cuh", "gemm.cuh", "triblock.cuh", "gpu_block_kernel_fusion.cuh", "cholesky_small.cuh"]}
+// TL+ {"header_files": ["utils.cuh", "trsm_small.cuh", "cholesky.cuh", "gemm.cuh", "triblock.cuh", "gpu_block_kernel_fusion.cuh", "cholesky_small.cuh", "triblock_helper.cuh", "gpu_block_enhanced_deluxe_kernel_fusion.cuh", "gpu_block_enhanced_kernel_fusion.cuh"]}
 // TL {"workspace_files": []}
 
 #include <cstdint>
@@ -15,6 +15,9 @@
 #include "triblock.cuh"
 #include "gpu_block_kernel_fusion.cuh"
 #include "cholesky_small.cuh"
+#include "triblock_helper.cuh"
+#include "gpu_block_enhanced_deluxe_kernel_fusion.cuh"
+#include "gpu_block_enhanced_kernel_fusion.cuh"
 
 void generate_lower_triangular(uint32_t N, uint32_t block_n, float *A, uint32_t A_col_offset, uint32_t A_row_offset) {
     for (uint32_t i = 0; i < block_n; ++i) {
@@ -111,7 +114,8 @@ void test_triblock(uint32_t N, uint32_t block_n) {
 
     // Launch kernel (1 block, multiple warps)
     //triblock_small::launch_cholesky_trsm_combined(N, block_n, A_d, X_d);
-    triblock::launch_triblock_small(N, block_n, A_d, X_d, nullptr);
+    //triblock::launch_triblock_small(N, block_n, A_d, X_d, nullptr);
+    triblock::launch_triblock(N, block_n, A_d, X_d, nullptr);
 
     CUDA_CHECK(cudaDeviceSynchronize());
 
@@ -119,43 +123,18 @@ void test_triblock(uint32_t N, uint32_t block_n) {
         cudaMemcpy(X_gpu, X_d, N * N * sizeof(float), cudaMemcpyDeviceToHost));
     
     // Verify results
-
-    for (uint32_t i = 0; i < N; ++i) {
-        for (uint32_t j = 0; j < N; ++j) {
-            A_gpu[i * N + j] = 0.0f;
-            for (uint32_t k = 0; k < N; ++k) {
-                A_gpu[i * N + j] += X_gpu[i * N + k] * X_gpu[j * N + k];
-            }
-        }
-    }
-
     bool failed = false;
     float tol = 1e-3f;
-
-    // for (uint32_t i = 0; i < N; ++i) {
-    //     for (uint32_t j = 0; j < N; ++j) {
-    //         printf("X_gpu[%u, %u] = %f, X_true[%u, %u] = %f\n", i, j, X_gpu[i * N + j], i, j, X_true[i * N + j]);
-    //     }
-    // }
-
-    for (uint32_t i = 0; i < N; ++i) {
-        for (uint32_t j = 0; j < N; ++j) {
-            //printf("A_gpu[%u, %u] = %f, A[%u, %u] = %f\n", i, j, A_gpu[i * N + j], i, j, A[i * N + j]);
-            if (fabsf(A_gpu[i * N + j] - A[i * N + j]) < tol) {
-                continue;
-            } else {
-                printf("Mismatch at (%u, %u): got %.5f, expected %.5f\n", i, j, A_gpu[i * N + j], A[i * N + j]);
-                failed = true;
-            }
-        }
-    }
-
     double mse = 0.0;
     double ref_mean_square = 0.0;
-    for (int32_t i = 0; i < N; ++i) {
-        for (int32_t j = 0; j <= i; ++j) {
+    for (uint32_t i = 0; i < N; ++i) {
+        for (uint32_t j = 0; j <= i; ++j) {
             float diff = X_gpu[i * N + j] - X_true[i * N + j];
             mse += diff * diff;
+            if (fabsf(diff) > tol) {
+                printf("Mismatch at (%u, %u): got %.5f, expected %.5f\n", i, j, X_gpu[i * N + j], X_true[i * N + j]);
+                failed = true;
+            }
             ref_mean_square += X_true[i * N + j] * X_true[i * N + j];
         }
     }
@@ -164,6 +143,7 @@ void test_triblock(uint32_t N, uint32_t block_n) {
     float rmse = std::sqrt(mse);
     float rel_rmse = rmse / std::sqrt(ref_mean_square);
     printf("RMSE = %f, REL_RMSE = %f\n", rmse, rel_rmse);
+
 
     if (!failed) {
         printf("Test PASSED for N=%u, block_n=%u\n", N, block_n);
@@ -206,7 +186,13 @@ int main() {
     // test_triblock(128, 64);
     // test_triblock(256, 64);
     // test_triblock(512, 64);
+    test_triblock(64, 64);
     test_triblock(1024, 64);
+    test_triblock(1024, 128);
+    test_triblock(1024, 256);
+    test_triblock(1024, 512);
+    test_triblock(1024, 1024);
+
     //test_triblock(2048, 32);
     return 0;
 }

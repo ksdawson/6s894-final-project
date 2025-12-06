@@ -1,5 +1,5 @@
 // TL+ {"compile_flags": ["-lcuda"]}
-// TL+ {"header_files": ["utils.cuh", "trsm_small.cuh", "cholesky.cuh", "gemm.cuh", "gpu_block_kernel_fusion.cuh", "cholesky_small.cuh"]}
+// TL+ {"header_files": ["utils.cuh", "trsm_small.cuh", "cholesky.cuh", "gemm.cuh", "gpu_block_kernel_fusion.cuh", "cholesky_small.cuh", "triblock_helper.cuh", "gpu_block_enhanced_deluxe_kernel_fusion.cuh", "gpu_block_enhanced_kernel_fusion.cuh"]}
 // TL {"workspace_files": []}
 
 #pragma once
@@ -14,6 +14,9 @@
 #include "gemm.cuh"
 #include "gpu_block_kernel_fusion.cuh"
 #include "cholesky_small.cuh"
+#include "triblock_helper.cuh"
+#include "gpu_block_enhanced_deluxe_kernel_fusion.cuh"
+#include "gpu_block_enhanced_kernel_fusion.cuh"
 
 // #define CUDA_CHECK(x) \
 //   do { \
@@ -21,6 +24,78 @@
 //   } while (0)
 
 namespace triblock {
+size_t get_workspace_size(int32_t size) {
+    return 0;
+}
+
+// W: number of warps
+// T_TS: number of tiles for GEMM
+// have to ensure that T_TS * sqrt(W*32) = block_n because W*32 threads work on one tile in GEMM
+template <uint32_t m, uint32_t W, uint32_t T_TS>
+void triblock(const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace, const uint32_t smem_size_bytes) {
+    const int32_t num_blocks = (int32_t)(N / block_n);
+    TB tb = {in, out, N, block_n, m};
+
+    const int32_t tiles_per_dim_GEMM = block_n / (16*4);
+    const int32_t num_GPU_blocks = tiles_per_dim_GEMM * (tiles_per_dim_GEMM + 1) / 2;
+
+    // solve A00 using block cholesky and update out
+    triblock_helper::triblock_block_cholesky<m, W, T_TS, T_TS>(tb, 0, smem_size_bytes);
+
+    // loop through all other row blocks
+    for (uint32_t i = 1; i < num_blocks; ++i) {
+        
+        float *A = triblock_helper::get_block(out, i-1, i-1, N, block_n);
+        float *X = triblock_helper::get_block(out, i, i-1, N, block_n);
+        float const *B = triblock_helper::get_block(in, i, i-1, N, block_n);
+
+        // solve block TRSM and update out
+        trsm_small::triblock_block_trsm_naive<W><<<48, W*32>>>(A, X, B, 
+            N, N, N, block_n);
+
+        // Big GEMM update and update in, unfortunately
+        // computes A_ii - XX^T
+        
+        const float *A_ii = triblock_helper::get_block(in, i, i, N, block_n);
+        gemm::triblock_diagonal_gemm<4, 16><<<num_GPU_blocks, 16*16, 64*64*sizeof(float)*2>>>(const_cast<float*>(A_ii), X, N, block_n, 64*64*sizeof(float)*2);
+
+        // solve block Cholesky again and update out
+        triblock_helper::triblock_block_cholesky<m, W, T_TS, T_TS>(tb, i, smem_size_bytes);
+
+    }
+
+}
+
+void launch_triblock(const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace) {
+    constexpr uint32_t m = 16;
+    constexpr uint32_t W = 8;
+    constexpr uint32_t T_TS = 1;
+
+    constexpr int smem_size_bytes = m * m * sizeof(float);
+    cudaFuncSetAttribute(
+        alt_kernel_fusion::chol_kernel<m>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        smem_size_bytes
+    );
+    cudaFuncSetAttribute(
+        triblock_helper::block_kernel<m, W, T_TS, T_TS>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        smem_size_bytes * 3 // need to store 3 blocks in smem
+    );
+
+    cudaFuncSetAttribute(
+        gemm::triblock_diagonal_gemm<4, 16>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        4*16*4*16*sizeof(float) * 2 // need to store 2 blocks in smem
+    );
+
+    triblock<16, 8, 1>(N, block_n, in, out, workspace, smem_size_bytes);
+
+}
+
+}
+
+namespace triblock_small {
 size_t get_workspace_size(int32_t size) {
     return 0;
 }
@@ -62,7 +137,8 @@ __device__ void triblock_update(const float *Aii, float *smem, const uint32_t N)
     __syncthreads();
 }
 
-// Works for N >=3, block_n >=2, and block_n <= 32
+// Works for N >=3, block_n >=2, and block_n <= 64
+// better than cholesky_trsm_combined with microoptimization
 // Computes out = in*in^T, block Cholesky decomposition for triblock diagonal
 // N: total dimension of the matrix now!!!!!!!!! different from cholesky_trsm_combined
 // block_n: dimension of each block in triblock diagonal
@@ -82,14 +158,7 @@ __global__ void triblock_2(const uint32_t N, float const *in, float *out) {
     cholesky_small::block_col_cholesky(smem2, smem1, block_n, block_n, block_n);
     // compute cholesky and store in smem1
     block_cholesky_space::smem_to_gmem(out, smem1, N, block_n);
-    // if (threadIdx.x == 0) {
-    //     for (uint32_t i = 0; i < block_n; ++i) {
-    //         for (uint32_t j = 0; j < block_n; ++j) {
-    //             printf("smem1[%u, %u] = %f\n", i, j, smem1[i * N + j]);
-    //         }
-    //     }
-    // }
-
+    
     const float *A;
     float *Lii;
     float *Lij;
@@ -140,12 +209,6 @@ void launch_triblock_small(const uint32_t N, const uint32_t block_n, float const
         printf("block_n not supported\n");
     }
     CUDA_CHECK(cudaDeviceSynchronize());
-}
-}
-
-namespace triblock_small {
-size_t get_workspace_size(int32_t size) {
-    return 0;
 }
 
 __device__ uint32_t calc_offset(const uint32_t block_n, const uint32_t block_idx) {

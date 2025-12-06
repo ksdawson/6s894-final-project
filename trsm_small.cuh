@@ -132,6 +132,19 @@ __device__ void block_trsm(float const *A, float *X, float const *B,
   __syncthreads();
 }
 
+// W: number of warps
+template <uint32_t W>
+__global__ void triblock_block_trsm_naive(float const *A, float *X, float const *B, 
+  const uint32_t A_n, const uint32_t X_n, const uint32_t B_n,
+  const uint32_t block_n) {
+
+    for (uint32_t i = (int)(threadIdx.x / 32) + blockIdx.x * W; i < block_n; i += W * gridDim.x) {
+      float *x = X + i * X_n; // row
+      float const *b = B + i * B_n; // row
+      block_forward_substitution<true, true>(A, x, b, A_n, X_n, B_n, block_n);
+    }
+  }
+
 ////////////////////////////////////////////////////////////////////////////////
 // Host functions
 
