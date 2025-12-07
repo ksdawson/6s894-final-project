@@ -60,6 +60,7 @@ __device__ void gmem_to_smem_async(const float *gmem, float*smem,
     }
     __pipeline_commit();
     __pipeline_wait_prior(0);
+    __syncthreads();
 }
 template <uint32_t smem_w>
 __device__ void gmem_to_smem_async(const float *gmem, float*smem, const uint32_t gmem_w) {
@@ -73,6 +74,7 @@ __device__ void gmem_to_smem_async(const float *gmem, float*smem, const uint32_t
     }
     __pipeline_commit();
     __pipeline_wait_prior(0);
+    __syncthreads();
 }
 __device__ void gmem_to_smem_async(const float *gmem1, const float *gmem2,
     float*smem1, float*smem2,
@@ -87,6 +89,7 @@ __device__ void gmem_to_smem_async(const float *gmem1, const float *gmem2,
     }
     __pipeline_commit();
     __pipeline_wait_prior(0);
+    __syncthreads();
 }
 template <uint32_t smem_w>
 __device__ void gmem_to_smem_async(const float *gmem1, const float *gmem2, float*smem1, float*smem2, const uint32_t gmem_w) {
@@ -99,6 +102,7 @@ __device__ void gmem_to_smem_async(const float *gmem1, const float *gmem2, float
     }
     __pipeline_commit();
     __pipeline_wait_prior(0);
+    __syncthreads();
 }
 
 __device__ void gmem_to_smem(const float *gmem, float*smem,
