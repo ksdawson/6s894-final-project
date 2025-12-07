@@ -108,7 +108,7 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
     // Chol
     const float *Ajj = block_cholesky_space::get_block(A, j, j, n, m);
     float *Ljj = smem;
-    cholesky_small::block_col_cholesky(Ajj, Ljj, n, m, m);
+    cholesky_small::block_col_cholesky<m, m>(Ajj, Ljj, n);
 
     // Write back Ljj
     Ljj = block_cholesky_space::get_block(L, j, j, n, m);

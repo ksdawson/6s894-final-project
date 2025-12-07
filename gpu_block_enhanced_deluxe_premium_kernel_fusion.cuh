@@ -61,7 +61,7 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
                 // Chol Aii
                 float *Aii = smem;
                 float *Lii = smem2;
-                cholesky_small::block_col_cholesky(Aii, Lii, m, m, m);
+                cholesky_small::block_col_cholesky<m, m, m>(Aii, Lii);
 
                 // Write back Lii
                 Lii = block_cholesky_space::get_block(L, i, i, n, m);
