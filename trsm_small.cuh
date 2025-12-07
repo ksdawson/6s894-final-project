@@ -20,7 +20,7 @@ size_t get_workspace_size(int32_t size) {
 // Substitution methods
 
 template <bool x_row, bool b_row>
-__device__ void forward_substitution(const uint32_t n, float const *A, float *x, float const *b) {
+__device__ void forward_substitution(const uint32_t n, const uint32_t r, float const *A, float *x, float const *b) {
   // Use local thread idx as this is done at the warp level
   const uint32_t thread_idx = threadIdx.x % 32;
   for (uint32_t i = 0; i < n; ++i) {
@@ -40,7 +40,7 @@ __device__ void forward_substitution(const uint32_t n, float const *A, float *x,
       if constexpr (b_row)
         xi = (b[i] - sum) / A[i * n + i];
       else
-        xi = (b[i * n] - sum) / A[i * n + i];
+        xi = (b[i * r] - sum) / A[i * n + i];
       if constexpr (x_row)
         x[i] = xi;
       else
@@ -51,14 +51,14 @@ __device__ void forward_substitution(const uint32_t n, float const *A, float *x,
   }
 }
 
-__global__ void forward_substitution_kernel(uint32_t n, const float *A, float *x, float *b) {
-  forward_substitution<true, true>(n, A, x, b);
+__global__ void forward_substitution_kernel(uint32_t n, uint32_t r, const float *A, float *x, float *b) {
+  forward_substitution<true, true>(n, r, A, x, b);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // TRSM
 
-__device__ void trsm(const uint32_t n, float const *A, float *X, float *B) {
+__device__ void trsm(const uint32_t n, const uint32_t r, float const *A, float *X, float *B) {
   // Assumes we're solving for X in A * X^T = B, so we can use rows of X instead of cols
   
   // Get grid-level warp idx
@@ -66,16 +66,16 @@ __device__ void trsm(const uint32_t n, float const *A, float *X, float *B) {
   const uint32_t warp_idx = warps * blockIdx.x + threadIdx.x / 32;
 
   // Iterate over rows of X,B with each row handled by one warp
-  for (uint32_t i = warp_idx; i < n; i += warps * gridDim.x) {
+  for (uint32_t i = warp_idx; i < r; i += warps * gridDim.x) {
     float *x = X + i * n;   // row
     float const *b = B + i; // col
-    forward_substitution<true, false>(n, A, x, b);
+    forward_substitution<true, false>(n, r, A, x, b);
   }
 }
 
-__global__ void trsm_kernel(uint32_t n, const float *A, float *X,
+__global__ void trsm_kernel(uint32_t n, uint32_t r, const float *A, float *X,
                             float *B) {
-  trsm(n, A, X, B);
+  trsm(n, r, A, X, B);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -150,8 +150,8 @@ __global__ void triblock_block_trsm_naive(float const *A, float *X, float const 
 ////////////////////////////////////////////////////////////////////////////////
 // Host functions
 
-void launch_trsm(const uint32_t n, float const *A, float *X, float *B, void *workspace) {
-  trsm_kernel<<<48, 32*32>>>(n, A, X, B);
+void launch_trsm(const uint32_t n, const uint32_t r, float const *A, float *X, float *B, void *workspace) {
+  trsm_kernel<<<48, 32*32>>>(n, r, A, X, B);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

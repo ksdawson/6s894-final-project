@@ -282,7 +282,7 @@ void trsmGraphLaunch(uint32_t n, float *A_d, float *b_d, float *x_d,
   printf("Custom Graph TRSM Time: %.3f ms\n", milliseconds);
 }
 
-void launch_trsm(uint32_t n, const float *A, float *x, float *b,
+void launch_trsm(uint32_t n, int32_t r, const float *A, float *x, float *b,
                  void *workspace) {
   constexpr uint32_t blocksize = 32;
   uint32_t numblocks = n / blocksize;
@@ -290,7 +290,7 @@ void launch_trsm(uint32_t n, const float *A, float *x, float *b,
   cudaGraph_t graph;
   CUDA_CHECK(cudaGraphCreate(&graph, 0));
 
-  buildTriangularSolverGraph<blocksize>(graph, numblocks, n, n, A, x, b);
+  buildTriangularSolverGraph<blocksize>(graph, numblocks, n, r, A, x, b);
   cudaGraphExec_t graphExec;
   CUDA_CHECK(cudaGraphInstantiate(&graphExec, graph, NULL, NULL, 0));
   CUDA_CHECK(cudaGraphLaunch(graphExec, 0));

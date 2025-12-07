@@ -235,9 +235,9 @@ void triblock(const uint32_t N, const uint32_t block_n, float const *in, float *
         float const *B = triblock_helper::get_block(in, i, i-1, N, block_n);
 
         // // solve block TRSM and update out
-        // trsm_small::triblock_block_trsm_naive<W><<<48, W*32>>>(A, X, B, 
-        //    N, N, N, block_n);
-        triblock_helper::triblock_block_trsm<block_T_TS, trsm_r><<<num_GPU_blocks_TRSM, num_threads_TRSM, block_smem_size_bytes*3>>>(A, X, B, N, N, N, block_n);
+        trsm_small::triblock_block_trsm_naive<W><<<48, W*32>>>(A, X, B, 
+           N, N, N, block_n);
+        // triblock_helper::triblock_block_trsm<block_T_TS, trsm_r><<<num_GPU_blocks_TRSM, num_threads_TRSM, block_smem_size_bytes*3>>>(A, X, B, N, N, N, block_n);
 
         // Big GEMM update and update in, unfortunately
         // computes A_ii - XX^T
