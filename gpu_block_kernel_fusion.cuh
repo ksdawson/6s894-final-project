@@ -61,11 +61,35 @@ __device__ void gmem_to_smem_async(const float *gmem, float*smem,
     __pipeline_commit();
     __pipeline_wait_prior(0);
 }
-
+template <uint32_t smem_w>
+__device__ void gmem_to_smem_async(const float *gmem, float*smem, const uint32_t gmem_w) {
+    for (uint32_t idx = threadIdx.x; idx < smem_w * smem_w / 4; idx += blockDim.x) {
+        // Get index to copy
+        const uint32_t flat_idx = idx * 4;
+        const uint32_t i = flat_idx / smem_w;
+        const uint32_t j = flat_idx % smem_w;
+        // Copy mem over
+        __pipeline_memcpy_async(&smem[i * smem_w + j], &gmem[i * gmem_w + j], sizeof(float4), 0);
+    }
+    __pipeline_commit();
+    __pipeline_wait_prior(0);
+}
 __device__ void gmem_to_smem_async(const float *gmem1, const float *gmem2,
     float*smem1, float*smem2,
     const uint32_t gmem_w, const uint32_t smem_w
 ) {
+    for (uint32_t idx = threadIdx.x; idx < smem_w * smem_w / 4; idx += blockDim.x) {
+        const uint32_t flat_idx = idx * 4;
+        const uint32_t i = flat_idx / smem_w;
+        const uint32_t j = flat_idx % smem_w;
+        __pipeline_memcpy_async(&smem1[i * smem_w + j], &gmem1[i * gmem_w + j], sizeof(float4), 0);
+        __pipeline_memcpy_async(&smem2[i * smem_w + j], &gmem2[i * gmem_w + j], sizeof(float4), 0);
+    }
+    __pipeline_commit();
+    __pipeline_wait_prior(0);
+}
+template <uint32_t smem_w>
+__device__ void gmem_to_smem_async(const float *gmem1, const float *gmem2, float*smem1, float*smem2, const uint32_t gmem_w) {
     for (uint32_t idx = threadIdx.x; idx < smem_w * smem_w / 4; idx += blockDim.x) {
         const uint32_t flat_idx = idx * 4;
         const uint32_t i = flat_idx / smem_w;
@@ -223,7 +247,7 @@ __device__ void block_update(const float *A, float *L,
         // Load Lik, Ljk into smem
         float *Lik = get_block(L, i, k, n, m);
         float *Ljk = get_block(L, j, k, n, m);
-        gmem_to_smem_async(Lik, Ljk, smem1, smem2, n, m);
+        gmem_to_smem_async<m>(Lik, Ljk, smem1, smem2, n);
 
         if (tile_i < N && tile_j < N) {
             block_gemm_naive<m, m, m, T_TH, T_TW>(smem1, smem2, reg, tile_i, tile_j);
@@ -274,7 +298,7 @@ __device__ void diagonal_block_update(const float *A, float *L,
     for (uint32_t k = 0; k < j; ++k) {
         // Load Lik into smem
         float *Lik = get_block(L, i, k, n, m);
-        gmem_to_smem_async(Lik, smem, n, m);
+        gmem_to_smem_async<m>(Lik, smem, n);
 
         if (tile_i < N && tile_j < N) {
             diagonal_block_gemm_naive<m, m, T_TH, T_TW>(smem, reg, tile_i, tile_j);
