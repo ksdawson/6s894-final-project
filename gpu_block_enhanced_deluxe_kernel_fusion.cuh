@@ -79,7 +79,7 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
 
         // Load Ljj into smem
         float *Ljj = block_cholesky_space::get_block(L, j, j, n, m);
-        block_cholesky_space::gmem_to_smem(Ljj, smem3, n, m);
+        block_cholesky_space::gmem_to_smem_async(Ljj, smem3, n, m);
         Ljj = smem3;
 
         // TRSM
