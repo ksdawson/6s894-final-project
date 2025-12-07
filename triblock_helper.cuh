@@ -130,8 +130,8 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
     block_cholesky_space::smem_to_gmem(Ljj, smem2, n, m);
 }
 
-template <uint32_t m, uint32_t W, uint32_t T_TS, uint32_t T_TW>
-void triblock_block_cholesky(TB tb, const uint32_t bi, const uint32_t smem_size_bytes) {
+template <uint32_t m, uint32_t W, uint32_t T_TS, uint32_t T_TW, uint32_t smem_size_bytes>
+void triblock_block_cholesky(TB tb, const uint32_t bi) {
     const float *in = tb.in;
     float *out = tb.out;
     
@@ -145,5 +145,83 @@ void triblock_block_cholesky(TB tb, const uint32_t bi, const uint32_t smem_size_
         triblock_helper::block_kernel<m, W, T_TS, T_TS><<<48, W*32, smem_size_bytes*3>>>(const_cast<float*>(A), L, tb.N, tb.block_n, j);
     }
 }  
+
+// asumes A_n == X_n!!!
+template <uint32_t T_TH, uint32_t r>
+__device__ void triblock_trsm_update(const float *B_ij, const float *A_j, const float *X_i, 
+  float *reg, 
+  float *smem1, float *smem2, float *smem3, 
+  const uint32_t A_n, const uint32_t X_n, const uint32_t B_n, 
+  const uint32_t j) {
+
+  const uint32_t thread_tile_i = threadIdx.x / (r / T_TH);
+  const uint32_t thread_tile_j = threadIdx.x % (r / T_TH);
+  const bool valid_thread = thread_tile_i < (r / T_TH) && thread_tile_j < (r / T_TH);
+
+  for (int32_t k = 0; k < j; ++k) {
+    // save A_tjj, X_tj into smem
+    const float *A_jk = A_j + k * r;
+    const float *X_ik = X_i + k * r;
+    block_cholesky_space::gmem_to_smem(A_jk, X_ik, smem1, smem2, A_n, r);
+
+    // call block gemm
+    if (valid_thread) {
+      block_cholesky_space::block_gemm_naive<r, r, r, T_TH, T_TH>(smem2, smem1, reg, thread_tile_i, thread_tile_j);
+    }
+    __syncthreads();
+  }
+
+  if (valid_thread) {
+    const float *B_ij_subtile = B_ij + thread_tile_i * T_TH * B_n + thread_tile_j * T_TH;
+    float *smem3_subtile = smem3 + thread_tile_i * T_TH * r + thread_tile_j * T_TH;
+
+    for (int32_t ti = 0; ti < T_TH; ++ti) {
+      for (int32_t tj = 0; tj < T_TH; ++tj) {
+        smem3_subtile[ti * r + tj] = B_ij_subtile[ti * B_n + tj] - reg[ti * T_TH + tj];
+      }
+    }
+  }
+  __syncthreads();
+}   
+
+
+template <uint32_t T_TH, uint32_t r>
+__global__ void triblock_block_trsm (float const *A, float *X, const float *B,
+  const uint32_t A_n, const uint32_t X_n, const uint32_t B_n,
+  const uint32_t block_n
+) {
+  
+  extern __shared__ float smem[];
+  float *smem1 = smem;
+  float *smem2 = smem + r * r;
+  float *smem3 = smem + r * r * 2;
+  const bool valid_block = blockIdx.x < (block_n / r);
+
+  if (valid_block) {
+    // Calculate X, B pointers
+    float *X_i = X + r * blockIdx.x * X_n; // rows of X
+    const float *B_i = B + r * blockIdx.x * B_n; // rows of B
+
+  // loop through rows in steps of r to calculate trsm
+    for (uint32_t j = 0; j < (int)(block_n / r); ++j) {
+      float reg[T_TH*T_TH] = {0.0f};
+
+      // find column of X we are calculating for
+      const float *B_ij = B_i + j * r; // column of B_i
+      const float *A_j = A + j * r* A_n; // rows of A
+
+      // GEMM update on B (store in smem3)
+      triblock_trsm_update<T_TH, r>(B_ij, A_j, X_i, reg, smem1, smem2, smem3, A_n, X_n, B_n, j);
+      
+      // call block trsm
+      const float *A_jj = block_cholesky_space::get_block(A, j, j, A_n, r);
+      float *X_ij = X_i + j * r; // column of X_i
+      block_cholesky_space::gmem_to_smem(A_jj, smem1, A_n, r);
+      trsm_small::block_trsm(smem1, smem2, smem3, r, r, r, r);
+
+      block_cholesky_space::smem_to_gmem(X_ij, smem2, X_n, r);
+    }
+  }
+}
 
 }

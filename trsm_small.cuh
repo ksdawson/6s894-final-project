@@ -145,6 +145,8 @@ __global__ void triblock_block_trsm_naive(float const *A, float *X, float const 
     }
   }
 
+
+
 ////////////////////////////////////////////////////////////////////////////////
 // Host functions
 
