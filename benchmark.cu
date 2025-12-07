@@ -1,5 +1,5 @@
 // TL+ {"compile_flags": ["-lcuda", "-lcublas", "-lcusolver"]}
-// TL+ {"header_files": ["utils.cuh", "cholesky.cuh", "trsm.cuh", "gpu_block_kernel_fusion.cuh", "cholesky_small.cuh", "trsm_small.cuh", "gpu_block_enhanced_kernel_fusion.cuh", "gtrsm.cuh", "cusolver.cuh", "cusolver_utils.cuh", "triblock.cuh", "gemm.cuh", "gpu_block_enhanced_deluxe_kernel_fusion.cuh"]}
+// TL+ {"header_files": ["utils.cuh", "cholesky.cuh", "trsm.cuh", "gpu_block_kernel_fusion.cuh", "cholesky_small.cuh", "trsm_small.cuh", "gpu_block_enhanced_kernel_fusion.cuh", "gtrsm.cuh", "cusolver.cuh", "cusolver_utils.cuh", "triblock.cuh", "gemm.cuh", "gpu_block_enhanced_deluxe_kernel_fusion.cuh", "gpu_block_enhanced_deluxe_premium_kernel_fusion.cuh"]}
 // TL+ {"workspace_files": []}
 
 #include <chrono>
@@ -21,6 +21,7 @@
 #include "gpu_block_kernel_fusion.cuh"
 #include "gpu_block_enhanced_kernel_fusion.cuh"
 #include "gpu_block_enhanced_deluxe_kernel_fusion.cuh"
+#include "gpu_block_enhanced_deluxe_premium_kernel_fusion.cuh"
 #include "cusolver.cuh"
 #include "cusolver_utils.cuh"
 #include "triblock.cuh"
@@ -51,6 +52,7 @@ enum class Phase {
     TRSM_SMALL,
     ENHANCED_CHOLESKY,
     ENHANCED_DELUXE_CHOLESKY,
+    ENHANCED_DELUXE_PREMIUM_CHOLESKY,
     CUSOLVER_POTRF,
     CUBLAS_TRSM,
     TRIBLOCK_SMALL
@@ -173,7 +175,7 @@ TestData generate_test_data(
     Phase phase) {
     auto data = TestData{};
     for (auto const &config : configs) {
-        if (phase == Phase::CHOLESKY || phase == Phase::CHOLESKY_SMALL || phase == Phase::ENHANCED_CHOLESKY || phase == Phase::ENHANCED_DELUXE_CHOLESKY) {
+        if (phase == Phase::CHOLESKY || phase == Phase::CHOLESKY_SMALL || phase == Phase::ENHANCED_CHOLESKY || phase == Phase::ENHANCED_DELUXE_CHOLESKY || phase == Phase::ENHANCED_DELUXE_PREMIUM_CHOLESKY) {
             auto size = config.size;
             data.c[{size}] = generate_lower_triangular_matrix(size);
             data.a[{size}] = chol_generate(data.c[{size}], size);
@@ -819,6 +821,23 @@ struct CholeskyEnhancedDeluxe {
     }
 };
 
+struct CholeskyEnhancedDeluxePremium {
+    constexpr static char const *name = "cholesky_enhanced_deluxe_premium";
+
+    static size_t get_workspace_size(int32_t size) {
+        return prem_deluxe_alt_kernel_fusion::get_workspace_size(size);
+    }
+
+    static void
+    run(int32_t size,
+        float const *a,
+        float *c,
+        float *b,
+        void *workspace) {
+        prem_deluxe_alt_kernel_fusion::launch_block_cholesky(size, a, c, workspace);
+    }
+};
+
 // can add more structs here for other implementations of Cholesky decompositions -- XY
 
 std::vector<BenchmarkResults> run_all_impls(
@@ -844,6 +863,8 @@ std::vector<BenchmarkResults> run_all_impls(
         results.push_back(run_all_configs<TriblockSmall>(phase, data, configs));
     } else if (phase == Phase::ENHANCED_DELUXE_CHOLESKY) {
         results.push_back(run_all_configs<CholeskyEnhancedDeluxe>(phase, data, configs));
+    } else if (phase == Phase::ENHANCED_DELUXE_PREMIUM_CHOLESKY) {
+        results.push_back(run_all_configs<CholeskyEnhancedDeluxePremium>(phase, data, configs));
     }
     return results;
 }
@@ -895,6 +916,7 @@ int main(int argc, char **argv) {
     };
     auto data_cholesky = generate_test_data(configs, Phase::CHOLESKY);
     run_all_impls(Phase::CUSOLVER_POTRF, data_cholesky, configs);
+    run_all_impls(Phase::ENHANCED_DELUXE_PREMIUM_CHOLESKY, data_cholesky, configs);
     run_all_impls(Phase::ENHANCED_DELUXE_CHOLESKY, data_cholesky, configs);
     run_all_impls(Phase::ENHANCED_CHOLESKY, data_cholesky, configs);
     run_all_impls(Phase::CHOLESKY, data_cholesky, configs);

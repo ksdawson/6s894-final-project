@@ -443,8 +443,8 @@ void launch_block_cholesky(
         launch_specialized_kernel_dynamic_block<32, 2, 8>(n, in, out, (n/2)/32, (3*n/4)/32);
         launch_specialized_kernel_dynamic_block<16, 1, 8>(n, in, out, (3*n/4)/16, n/16);
     } else if (_m == 32) {
-        launch_specialized_kernel_dynamic_block<32, 2, 8>(n, in, out, 0, (n/2)/32);
-        launch_specialized_kernel_dynamic_block<16, 1, 8>(n, in, out, (n/2)/16, n/16);
+        launch_specialized_kernel_dynamic_block<32, 2, 8>(n, in, out, 0, (3*n/4)/32);
+        launch_specialized_kernel_dynamic_block<16, 1, 8>(n, in, out, (3*n/4)/16, n/16);
     } else {
         launch_specialized_kernel<16, 1, 8>(n, in, out);
     }
