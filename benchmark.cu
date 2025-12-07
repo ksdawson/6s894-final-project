@@ -879,20 +879,19 @@ std::vector<BenchmarkResults> run_all_impls(
 
 int main(int argc, char **argv) {
 
-    // auto configs = std::vector<BenchmarkConfig>{
-    //     {32, 32},
-    //     {64, 64},
-    //     // {128, 128},
-    //     // {512, 512},
-    //     // {1024, 1024}
-    //     // {2048, 32},
-    //     // {4096, 32}
-    // };
-    // auto data_cholesky = generate_test_data(configs, Phase::CHOLESKY, Solver::CHOLESKY);
-    // run_all_impls(Phase::CUSOLVER_POTRF, Solver::CHOLESKY, data_cholesky, configs);
-    // run_all_impls(Phase::ENHANCED_DELUXE_PREMIUM_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
-    // run_all_impls(Phase::ENHANCED_DELUXE_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
-    // run_all_impls(Phase::ENHANCED_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
+    auto configs = std::vector<BenchmarkConfig>{
+        {32, 32},
+        {64, 64},
+        {128, 128},
+        {512, 512},
+        {1024, 1024},
+        {2048, 2048}
+    };
+    auto data_cholesky = generate_test_data(configs, Phase::CHOLESKY, Solver::CHOLESKY);
+    run_all_impls(Phase::CUSOLVER_POTRF, Solver::CHOLESKY, data_cholesky, configs);
+    run_all_impls(Phase::ENHANCED_DELUXE_PREMIUM_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
+    run_all_impls(Phase::ENHANCED_DELUXE_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
+    run_all_impls(Phase::ENHANCED_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
     // run_all_impls(Phase::CHOLESKY, data_cholesky, configs);
     // run_all_impls(Phase::CHOLESKY_SMALL, data_cholesky, configs);
     
