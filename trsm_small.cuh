@@ -16,6 +16,7 @@ size_t get_workspace_size(int32_t size) {
     return 0;
 }
 
+
 ////////////////////////////////////////////////////////////////////////////////
 // Substitution methods
 
@@ -242,6 +243,7 @@ __device__ void block_trsm(const float *A, float *X, const float *B,
   // Wait for everything to be done
   __syncthreads();
 }
+
 template <uint32_t A_n, uint32_t X_n, uint32_t B_n, uint32_t r>
 __device__ void block_trsm(const float *A, float *X, const float *B) {
   // Done at the SM level
