@@ -1,5 +1,5 @@
 // TL+ {"compile_flags": ["-lcuda"]}
-// TL+ {"header_files": ["cholesky_small.cuh", "cpu.cuh", "utils.cuh", "trsm_small.cuh", "gpu_block_kernel_fusion.cuh", "gpu_block_enhanced_kernel_fusion.cuh", "gpu_block_enhanced_deluxe_kernel_fusion.cuh"]}
+// TL+ {"header_files": ["cholesky_small.cuh", "cpu.cuh", "utils.cuh", "trsm_small.cuh", "gpu_block_kernel_fusion.cuh", "gpu_block_enhanced_kernel_fusion.cuh", "gpu_block_enhanced_deluxe_kernel_fusion.cuh", "gpu_block_enhanced_deluxe_premium_kernel_fusion.cuh"]}
 // TL {"workspace_files": []}
 
 #include <cstdint>
@@ -14,6 +14,7 @@
 #include "gpu_block_kernel_fusion.cuh"
 #include "gpu_block_enhanced_kernel_fusion.cuh"
 #include "gpu_block_enhanced_deluxe_kernel_fusion.cuh"
+#include "gpu_block_enhanced_deluxe_premium_kernel_fusion.cuh"
 
 ////////////////////////////////////////////////////////////////////////////////
 // Cholesky test harness
