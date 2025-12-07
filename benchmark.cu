@@ -202,6 +202,12 @@ void run_config_cholesky(
 
     printf("  %8.02e", rel_rmse);
 
+    // for (int32_t i = 0; i < size; ++i) {
+    //     for (int32_t j = 0; j < size; ++j) {
+    //         printf("c_out_host[%d][%d] = %f, c[%d][%d] = %f\n", i, j, c_out_host[i * size + j], i, j, c[i * size + j]);
+    //     }
+    // }
+
     if (rel_rmse > 1e5) {
         printf("  %9s  %7s", "-", "-");
     } else {
@@ -875,17 +881,17 @@ int main(int argc, char **argv) {
     auto configs = std::vector<BenchmarkConfig>{
         {32, 32},
         {64, 64},
-        {128, 128},
-        {512, 512},
-        {1024, 1024}
+        // {128, 128},
+        // {512, 512},
+        // {1024, 1024}
         // {2048, 32},
         // {4096, 32}
     };
     auto data_cholesky = generate_test_data(configs, Phase::CHOLESKY, Solver::CHOLESKY);
-    run_all_impls(Phase::CUSOLVER_POTRF, Solver::CHOLESKY, data_cholesky, configs);
-    run_all_impls(Phase::ENHANCED_DELUXE_PREMIUM_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
-    run_all_impls(Phase::ENHANCED_DELUXE_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
-    run_all_impls(Phase::ENHANCED_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
+    // run_all_impls(Phase::CUSOLVER_POTRF, Solver::CHOLESKY, data_cholesky, configs);
+    // run_all_impls(Phase::ENHANCED_DELUXE_PREMIUM_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
+    // run_all_impls(Phase::ENHANCED_DELUXE_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
+    // run_all_impls(Phase::ENHANCED_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
     // run_all_impls(Phase::CHOLESKY, data_cholesky, configs);
     // run_all_impls(Phase::CHOLESKY_SMALL, data_cholesky, configs);
     
@@ -916,19 +922,19 @@ int main(int argc, char **argv) {
     // run_all_impls(Phase::TRSM_SMALL, Solver::TRSM_VECTOR, data_trsm, configs_trsmvec);
     // run_all_impls(Phase::TRSM, Solver::TRSM_VECTOR, data_trsm, configs_trsmvec);
 
-    // auto configs_triblock = std::vector<BenchmarkConfig>{
-    //     {1024, 32},
-    //     {1024, 64},
-    //     {1024, 128},
-    //     {1024, 256},
-    //     {1024, 512},
-    //     {1024, 1024}
-    // };
-    // auto data_triblock = generate_test_data(configs_triblock, Phase::TRIBLOCK_SMALL);
-    // //run_all_impls(Phase::TRIBLOCK_SMALL, data_triblock, configs_triblock);
-    // run_all_impls(Phase::TRIBLOCK, data_triblock, configs_triblock);
-    // run_all_impls(Phase::CUSOLVER_POTRF, data_triblock, configs_triblock);
-    // run_all_impls(Phase::ENHANCED_DELUXE_CHOLESKY, data_triblock, configs_triblock);
+    auto configs_triblock = std::vector<BenchmarkConfig>{
+        {1024, 32},
+        {1024, 64},
+        {1024, 128},
+        {1024, 256},
+        {1024, 512},
+        {1024, 1024}
+    };
+    auto data_triblock = generate_test_data(configs_triblock, Phase::TRIBLOCK_SMALL);
+    //run_all_impls(Phase::TRIBLOCK_SMALL, data_triblock, configs_triblock);
+    run_all_impls(Phase::TRIBLOCK, data_triblock, configs_triblock);
+    run_all_impls(Phase::CUSOLVER_POTRF, data_triblock, configs_triblock);
+    run_all_impls(Phase::ENHANCED_DELUXE_CHOLESKY, data_triblock, configs_triblock);
 
     //can compute speedups later if needed -- XY
     // for (int32_t j = 1; j < results.size(); ++j) {
