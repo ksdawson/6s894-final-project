@@ -427,24 +427,14 @@ void launch_block_cholesky(
     //     launch_specialized_kernel<64, 4, 8>(n, in, out);
     // }
 
-    // Find an m >= 16 that makes n/m = 64
-    uint32_t _n = n;
-    uint32_t _m = 64;
-    while (64 > _n / _m && _m >= 16) {
-        _m /= 2;
-    }
-    if (_m < 16) {
-        _m = 16;
-    }
-
-    // Every time n halves, halve m until m = 16
-    if (_m == 64) {
-        launch_specialized_kernel_dynamic_block<64, 4, 8>(n, in, out, 0, (n/2)/64);
-        launch_specialized_kernel_dynamic_block<32, 2, 8>(n, in, out, (n/2)/32, (3*n/4)/32);
-        launch_specialized_kernel_dynamic_block<16, 1, 8>(n, in, out, (3*n/4)/16, n/16);
-    } else if (_m == 32) {
-        launch_specialized_kernel_dynamic_block<32, 2, 8>(n, in, out, 0, (3*n/4)/32);
-        launch_specialized_kernel_dynamic_block<16, 1, 8>(n, in, out, (3*n/4)/16, n/16);
+    // Make sure # blocks never falls below 1/2 # SMs (w/ block size btwn 16 and 64)
+    if (n > 1536 + 64) {
+        launch_specialized_kernel_dynamic_block<64, 2, 32>(n, in, out, 0, (n-1536)/64);
+        launch_specialized_kernel_dynamic_block<32, 2, 8>(n, in, out, (n-1536)/32, (n-768)/32);
+        launch_specialized_kernel_dynamic_block<16, 1, 8>(n, in, out, (n-768)/16, n/16);
+    } else if (n > 768 + 32) {
+        launch_specialized_kernel_dynamic_block<32, 2, 8>(n, in, out, 0, (n-768)/32);
+        launch_specialized_kernel_dynamic_block<16, 1, 8>(n, in, out, (n-768)/16, n/16);
     } else {
         launch_specialized_kernel<16, 1, 8>(n, in, out);
     }

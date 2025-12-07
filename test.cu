@@ -448,5 +448,13 @@ int main(int argc, char **argv) {
     test_case_gpu(512, deluxe_alt_kernel_fusion::launch_block_cholesky);
     printf("\n");
 
+    printf("Testing GPU block w/ enhanced deluxe premium kernel fusion\n");
+    test_case_gpu(64, prem_deluxe_alt_kernel_fusion::launch_block_cholesky);
+    test_case_gpu(128, prem_deluxe_alt_kernel_fusion::launch_block_cholesky);
+    test_case_gpu(256, prem_deluxe_alt_kernel_fusion::launch_block_cholesky);
+    test_case_gpu(512, prem_deluxe_alt_kernel_fusion::launch_block_cholesky);
+    test_case_gpu(1024, prem_deluxe_alt_kernel_fusion::launch_block_cholesky);
+    test_case_gpu(2048, prem_deluxe_alt_kernel_fusion::launch_block_cholesky);
+
     return 0;
 }
