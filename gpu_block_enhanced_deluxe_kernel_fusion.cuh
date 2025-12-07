@@ -85,7 +85,7 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
         // TRSM
         float *Lij = smem2;
         float *Aij = smem;
-        trsm_small::block_trsm(Ljj, Lij, Aij, m, m, m, m); // A, X, B
+        trsm_small::block_trsm<m, m, m, m>(Ljj, Lij, Aij);
 
         // Write back Lij
         Lij = block_cholesky_space::get_block(L, i, j, n, m);
