@@ -36,4 +36,46 @@ template <typename T> __device__ T warp_prefix_sum(T val) {
 
   return val;
 }
+
+static cudaGraphExec_t instance = nullptr;
+static uint32_t last_n = 0;
+
+void launch_cuda_graph(
+  void (*launch_block_cholesky)(const uint32_t n, float const *in, float *out, void *workspace),
+  const uint32_t n, float const *in, float *out, void *workspace
+) {
+    // Invalidate graph if matrix size changes
+    if (instance != nullptr && n != last_n) {
+        cudaGraphExecDestroy(instance);
+        instance = nullptr;
+    }
+
+    // If no graph exists, capture one
+    if (instance == nullptr) {
+        cudaGraph_t graph;
+        
+        // Start recording on the default stream
+        cudaStreamBeginCapture(0, cudaStreamCaptureModeGlobal);
+
+        // This code records nodes into the graph instead of launching
+        launch_block_cholesky(n, in, out, workspace);
+
+        // Stop recording
+        cudaStreamEndCapture(0, &graph);
+
+        // Create an executable graph from the recording
+        // (This performs validation and sets up the launch structures)
+        cudaGraphInstantiate(&instance, graph, nullptr, nullptr, 0);
+
+        // Clean up the template graph (the Exec object owns the data now)
+        cudaGraphDestroy(graph);
+        
+        last_n = n;
+    }
+
+    // Launch the cached graph
+    // This issues all kernels in a single driver call
+    cudaGraphLaunch(instance, 0);
+}
+
 } // namespace utils
