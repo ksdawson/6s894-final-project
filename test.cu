@@ -417,35 +417,23 @@ int main(int argc, char **argv) {
     printf("\n");
 
     printf("Testing GPU block w/ kernel fusion\n");
-    printf("1x1 block Cholesky\n");
     test_case_gpu(64, block_cholesky_space::launch_block_cholesky);
-    printf("2x2 block Cholesky\n");
     test_case_gpu(128, block_cholesky_space::launch_block_cholesky);
-    printf("4x4 block Cholesky\n");
     test_case_gpu(256, block_cholesky_space::launch_block_cholesky);
-    printf("8x8 block Cholesky\n");
     test_case_gpu(512, block_cholesky_space::launch_block_cholesky);
     printf("\n");
 
     printf("Testing GPU block w/ enhanced kernel fusion\n");
-    printf("1x1 block Cholesky\n");
     test_case_gpu(64, alt_kernel_fusion::launch_block_cholesky);
-    printf("2x2 block Cholesky\n");
     test_case_gpu(128, alt_kernel_fusion::launch_block_cholesky);
-    printf("4x4 block Cholesky\n");
     test_case_gpu(256, alt_kernel_fusion::launch_block_cholesky);
-    printf("8x8 block Cholesky\n");
     test_case_gpu(512, alt_kernel_fusion::launch_block_cholesky);
     printf("\n");
 
     printf("Testing GPU block w/ enhanced deluxe kernel fusion\n");
-    printf("1x1 block Cholesky\n");
     test_case_gpu(64, deluxe_alt_kernel_fusion::launch_block_cholesky);
-    printf("2x2 block Cholesky\n");
     test_case_gpu(128, deluxe_alt_kernel_fusion::launch_block_cholesky);
-    printf("4x4 block Cholesky\n");
     test_case_gpu(256, deluxe_alt_kernel_fusion::launch_block_cholesky);
-    printf("8x8 block Cholesky\n");
     test_case_gpu(512, deluxe_alt_kernel_fusion::launch_block_cholesky);
     printf("\n");
 
@@ -454,8 +442,8 @@ int main(int argc, char **argv) {
     test_case_gpu(128, prem_deluxe_alt_kernel_fusion::launch_block_cholesky);
     test_case_gpu(256, prem_deluxe_alt_kernel_fusion::launch_block_cholesky);
     test_case_gpu(512, prem_deluxe_alt_kernel_fusion::launch_block_cholesky);
-    test_case_gpu(1024, prem_deluxe_alt_kernel_fusion::launch_block_cholesky);
     test_case_gpu(2048, prem_deluxe_alt_kernel_fusion::launch_block_cholesky);
+    printf("\n");
 
     return 0;
 }
