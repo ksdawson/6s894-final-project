@@ -202,6 +202,12 @@ void run_config_cholesky(
 
     printf("  %8.02e", rel_rmse);
 
+    // for (int32_t i = 0; i < size; ++i) {
+    //     for (int32_t j = 0; j < size; ++j) {
+    //         printf("c_out_host[%d][%d] = %f, c[%d][%d] = %f\n", i, j, c_out_host[i * size + j], i, j, c[i * size + j]);
+    //     }
+    // }
+
     if (rel_rmse > 1e5) {
         printf("  %9s  %7s", "-", "-");
     } else {
@@ -548,7 +554,7 @@ void run_config_cublas(
         }
     } else {
         // SHOULD CHANGE THIS TARGET TIME
-        double target_time_ms = 40.0;
+        double target_time_ms = 80.0;
         double elapsed_ms = 0.0;
         
         elapsed_ms = benchmark_ms(
@@ -780,7 +786,8 @@ struct Triblock {
         float *c,
         float *b,
         void *workspace) {
-        triblock::launch_triblock(size, block_size, a, c, workspace);
+        //triblock::launch_triblock(size, block_size, a, c, workspace);
+        utils::launch_cuda_graph_triblock(triblock::launch_triblock, size, block_size, a, c, workspace);
     }
 };
 
@@ -915,19 +922,19 @@ int main(int argc, char **argv) {
     // run_all_impls(Phase::TRSM_SMALL, Solver::TRSM_VECTOR, data_trsm, configs_trsmvec);
     // run_all_impls(Phase::TRSM, Solver::TRSM_VECTOR, data_trsm, configs_trsmvec);
 
-    // auto configs_triblock = std::vector<BenchmarkConfig>{
-    //     {1024, 32},
-    //     {1024, 64},
-    //     {1024, 128},
-    //     {1024, 256},
-    //     {1024, 512},
-    //     {1024, 1024}
-    // };
-    // auto data_triblock = generate_test_data(configs_triblock, Phase::TRIBLOCK_SMALL);
-    // //run_all_impls(Phase::TRIBLOCK_SMALL, data_triblock, configs_triblock);
-    // run_all_impls(Phase::TRIBLOCK, data_triblock, configs_triblock);
-    // run_all_impls(Phase::CUSOLVER_POTRF, data_triblock, configs_triblock);
-    // run_all_impls(Phase::ENHANCED_DELUXE_CHOLESKY, data_triblock, configs_triblock);
+    auto configs_triblock = std::vector<BenchmarkConfig>{
+        {1024, 32},
+        {1024, 64},
+        {1024, 128},
+        {1024, 256},
+        {1024, 512},
+        {1024, 1024}
+    };
+    auto data_triblock = generate_test_data(configs_triblock, Phase::TRIBLOCK_SMALL, Solver::CHOLESKY_TRIBLOCK);
+    //run_all_impls(Phase::TRIBLOCK_SMALL, data_triblock, configs_triblock);
+    run_all_impls(Phase::TRIBLOCK, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
+    run_all_impls(Phase::CUSOLVER_POTRF, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
+    //run_all_impls(Phase::ENHANCED_DELUXE_CHOLESKY, Solver::TRIBLOCK, data_triblock, configs_triblock);
 
     //can compute speedups later if needed -- XY
     // for (int32_t j = 1; j < results.size(); ++j) {
