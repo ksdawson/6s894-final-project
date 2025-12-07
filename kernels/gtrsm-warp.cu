@@ -33,7 +33,7 @@ __forceinline__ __device__ void
 blockSolve_warp(uint32_t col_id, uint32_t n, float const *A_sh, float *x_sh) {
 
   float x_val = x_sh[col_id];
-
+#pragma unroll
   for (int i = 0; i < blocksize; i++) {
     float pivot = x_val;
     if (col_id == i) {
@@ -57,6 +57,7 @@ __forceinline__ __device__ void blockSubtract_warp(uint32_t col_id, uint32_t n,
                                                    float const *A_sh,
                                                    float *x_sh, float *b_sh) {
   float delta = 0.0f;
+#pragma unroll
   for (int i = 0; i < blocksize; i++) {
     delta += A_sh[col_id * blocksize + i] * x_sh[i];
   }
