@@ -1,5 +1,5 @@
 // TL+ {"compile_flags": ["-lcuda"]}
-// TL+ {"header_files": ["utils.cuh", "trsm_small.cuh", "cholesky.cuh", "gemm.cuh", "gpu_block_kernel_fusion.cuh", "cholesky_small.cuh", "triblock_helper.cuh"]}
+// TL+ {"header_files": ["utils.cuh", "trsm_small.cuh", "cholesky.cuh", "gemm.cuh", "gpu_block_kernel_fusion.cuh", "cholesky_small.cuh", "triblock_helper.cuh", "gpu_block_enhanced_deluxe_kernel_fusion.cuh", "gpu_block_enhanced_kernel_fusion.cuh"]}
 // TL {"workspace_files": []}
 
 #pragma once
@@ -15,6 +15,8 @@
 #include "gpu_block_kernel_fusion.cuh"
 #include "cholesky_small.cuh"
 #include "triblock_helper.cuh"
+#include "gpu_block_enhanced_deluxe_kernel_fusion.cuh"
+#include "gpu_block_enhanced_kernel_fusion.cuh"
 
 // #define CUDA_CHECK(x) \
 //   do { \
