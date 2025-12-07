@@ -46,7 +46,8 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
         // TRSM
         float *Lij = smem2;
         float *Aij = smem;
-        trsm_small::block_trsm_reuse<W, m, m, m, m>(Ljj, Lij, Aij);
+        // trsm_small::block_trsm_reuse<W, m, m, m, m>(Ljj, Lij, Aij);
+        trsm_small::block_trsm<m, m, m, m>(Ljj, Lij, Aij);
 
         // Write back Lij
         Lij = block_cholesky_space::get_block(L, i, j, n, m);
@@ -133,7 +134,7 @@ void launch_block_cholesky(
         launch_specialized_kernel_dynamic_block<32, 2, 8>(n, in, out, 0, (n-768)/32);
         launch_specialized_kernel_dynamic_block<16, 1, 8>(n, in, out, (n-768)/16, n/16 - 1);
     } else {
-        deluxe_alt_kernel_fusion::launch_specialized_kernel<16, 1, 8>(n, in, out);
+        launch_specialized_kernel_dynamic_block<16, 1, 8>(n, in, out, 0, n/16 - 1);
     }
 }
 

@@ -229,7 +229,7 @@ __device__ void block_trsm_reuse(float *A, float *X, float *B,
   }
 }
 
-__device__ void block_trsm(const float *A, float *X, const float *B,
+__device__ void block_trsm(float *A, float *X, float *B,
   const uint32_t A_n, const uint32_t X_n, const uint32_t B_n,
   const uint32_t r
 ) {
@@ -245,7 +245,7 @@ __device__ void block_trsm(const float *A, float *X, const float *B,
 }
 
 template <uint32_t A_n, uint32_t X_n, uint32_t B_n, uint32_t r>
-__device__ void block_trsm(const float *A, float *X, const float *B) {
+__device__ void block_trsm(float *A, float *X, float *B) {
   // Done at the SM level
   for (uint32_t i = threadIdx.x / 32; i < r; i += blockDim.x / 32) {
     float *x = X + i * X_n; // row
@@ -257,7 +257,7 @@ __device__ void block_trsm(const float *A, float *X, const float *B) {
   __syncthreads();
 }
 template <uint32_t B_n, uint32_t r>
-__device__ void block_trsm(const float *A, float *X, const float *B,
+__device__ void block_trsm(float *A, float *X, float *B,
   const uint32_t A_n, const uint32_t X_n
 ) {
   // Done at the SM level

@@ -288,7 +288,7 @@ void test_forward_substitution(uint32_t N) {
   CUDA_CHECK(cudaMemset(x_d, 0, N * sizeof(float)));
 
   // Launch with one warp (since function assumes warp-level sum)
-  trsm_small::forward_substitution_kernel<<<1, 32>>>(N, A_d, x_d, b_d);
+  trsm_small::forward_substitution_kernel<<<1, 32>>>(N, N, A_d, x_d, b_d);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   CUDA_CHECK(cudaMemcpy(x_gpu, x_d, N * sizeof(float), cudaMemcpyDeviceToHost));
@@ -357,7 +357,7 @@ void test_trsm(uint32_t N) {
   CUDA_CHECK(cudaMemset(X_d, 0, N * N * sizeof(float)));
 
   // Launch kernel (1 block, multiple warps)
-  trsm_small::trsm_kernel<<<1, 32 * 32>>>(N, L_d, X_d, B_d);
+  trsm_small::trsm_kernel<<<1, 32 * 32>>>(N, N, L_d, X_d, B_d);
   CUDA_CHECK(cudaDeviceSynchronize());
 
   CUDA_CHECK(
