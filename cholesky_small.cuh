@@ -92,6 +92,11 @@ __device__ void block_cholesky(float const *A, float *L,
     }
 }
 
+// A: input matrix to perform cholesky on
+// L: output matrix to store the cholesky factor, typically in shared memory
+// A_n: padding for matrix A to calculate indexing
+// L_n: padding for matrix L to calculate indexing
+// r: number of columns/rows to process cholesky on
 __device__ void block_col_cholesky(float const *A, float *L,
     const uint32_t A_n, const uint32_t L_n,
     const uint32_t r
