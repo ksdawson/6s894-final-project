@@ -28,142 +28,107 @@ size_t get_workspace_size(int32_t size) { return 0; }
 //     exit(EXIT_FAILURE); \
 //   }
 
-template <uint32_t blocksize>
-__forceinline__ __device__ void
-blockSolve_warp(uint32_t col_id, uint32_t n, float const *A_sh, float *x_sh) {
+__forceinline__ __device__ void index2rowcol(uint32_t *row, uint32_t *col,
+                                             uint32_t k) {
+  uint32_t r = (uint32_t)floorf((sqrtf(8.0f * k + 1.0f) - 1.0f) * 0.5f);
+  uint32_t tr = r * (r + 1) / 2;
 
-  float x_val = x_sh[col_id];
-#pragma unroll
-  for (int i = 0; i < blocksize; i++) {
-    float pivot = x_val;
-    if (col_id == i) {
-      float diag = A_sh[i * blocksize + i];
-      pivot /= diag;
-      x_val = pivot;
+  *row = r;
+  *col = k - tr;
+}
+
+template <uint32_t blocksize>
+__forceinline__ __device__ void blockSolve(uint32_t n, float const *A, float *x,
+                                           float const *b) {
+
+  constexpr uint32_t numel = (blocksize * (blocksize + 1)) / 2;
+  uint32_t tid = threadIdx.x;
+  uint32_t bdim = blockDim.x;
+
+  __shared__ float sh_A[numel];
+  __shared__ float sh_x[blocksize];
+
+  for (uint32_t k = tid; k < numel; k += bdim) {
+    uint32_t i, j;
+    index2rowcol(&i, &j, k);
+    sh_A[k] = A[i * n + j];
+  }
+
+  for (uint32_t k = tid; k < blocksize; k += bdim) {
+    sh_x[k] = b[k];
+  }
+
+  __syncthreads();
+
+  for (uint32_t i = 0; i < blocksize; ++i) {
+
+    if (tid == 0) {
+      uint32_t diag_idx = i * (i + 1) / 2 + i;
+      float val = sh_x[i] / sh_A[diag_idx];
+      sh_x[i] = val;
     }
 
-    float pivot_bcast = __shfl_sync(0xffffffff, pivot, i);
+    __syncthreads();
 
-    if (col_id > i) {
-      x_val -= A_sh[col_id * blocksize + i] * pivot_bcast;
+    float x_i = sh_x[i];
+
+    for (uint32_t j = i + 1 + tid; j < blocksize; j += bdim) {
+      uint32_t A_ji_idx = j * (j + 1) / 2 + i;
+      sh_x[j] -= sh_A[A_ji_idx] * x_i;
     }
+    __syncthreads();
   }
 
-  x_sh[col_id] = x_val;
+  for (uint32_t k = tid; k < blocksize; k += bdim) {
+    x[k] = sh_x[k];
+  }
 }
 
 template <uint32_t blocksize>
-__forceinline__ __device__ void blockSubtract_warp(uint32_t col_id, uint32_t n,
-                                                   float const *A_sh,
-                                                   float *x_sh, float *b_sh) {
-  float delta = 0.0f;
+__forceinline__ __device__ void blockSubtract(uint32_t n, float const *A,
+                                              float *x, float *b) {
+  constexpr uint32_t numel = blocksize * blocksize;
+  uint32_t tid = threadIdx.x;
+  uint32_t bdim = blockDim.x;
+  __shared__ float sh_A[numel];
+  __shared__ float sh_x[blocksize];
+
+  for (uint32_t k = tid; k < numel; k += bdim) {
+    uint32_t r = k / blocksize;
+    uint32_t c = k % blocksize;
+    sh_A[k] = A[r * n + c];
+  }
+
+  for (uint32_t k = tid; k < blocksize; k += bdim) {
+    sh_x[k] = x[k];
+  }
+  __syncthreads();
+
+  for (uint32_t i = tid; i < blocksize; i += bdim) {
+    float dot = 0.0f;
 #pragma unroll
-  for (int i = 0; i < blocksize; i++) {
-    delta += A_sh[col_id * blocksize + i] * x_sh[i];
-  }
-  b_sh[col_id] -= delta;
-}
-
-template <uint32_t blocksize>
-__forceinline__ __device__ void load_A(uint32_t n, float const *A,
-                                       float *A_sh) {
-  uint32_t tid = threadIdx.x;
-  uint32_t bdim = blockDim.x;
-
-  for (uint32_t i = tid; i < blocksize * blocksize; i += bdim) {
-    A_sh[i] = A[(i / blocksize) * n + i % blocksize];
+    for (uint32_t j = 0; j < blocksize; ++j) {
+      dot += sh_A[i * blocksize + j] * sh_x[j];
+    }
+    b[i] -= dot;
   }
 }
-
-template <uint32_t blocksize>
-__forceinline__ __device__ void load_B(uint32_t n, float *B, float *B_sh) {
-  uint32_t tid = threadIdx.x;
-  uint32_t bdim = blockDim.x;
-
-  for (uint32_t i = tid; i < blocksize * blocksize; i += bdim) {
-    B_sh[i] = B[(i / blocksize) * n + i % blocksize];
-  }
-}
-
-template <uint32_t blocksize>
-__forceinline__ __device__ void load_X(uint32_t n, float *X, float *X_sh) {
-  uint32_t tid = threadIdx.x;
-  uint32_t bdim = blockDim.x;
-
-  for (uint32_t i = tid; i < blocksize * blocksize; i += bdim) {
-    X_sh[i] = X[(i / blocksize) * n + i % blocksize];
-  }
-}
-
-template <uint32_t blocksize>
-__forceinline__ __device__ void store_X(uint32_t n, float *X_sh, float *X) {
-  uint32_t tid = threadIdx.x;
-  uint32_t bdim = blockDim.x;
-
-  for (uint32_t i = tid; i < blocksize * blocksize; i += bdim) {
-    X[(i / blocksize) * n + i % blocksize] = X_sh[i];
-  }
-}
-
-template <uint32_t blocksize>
-__forceinline__ __device__ void store_B(uint32_t n, float *B_sh, float *B) {
-  uint32_t tid = threadIdx.x;
-  uint32_t bdim = blockDim.x;
-
-  for (uint32_t i = tid; i < blocksize * blocksize; i += bdim) {
-    B[(i / blocksize) * n + i % blocksize] = B_sh[i];
-  }
-}
-
 template <uint32_t blocksize>
 __global__ void blockSolve_kernel(uint32_t n, uint32_t k, float const *A,
-                                  float *X, float *B) {
-  extern __shared__ float shmem[];
-  float *A_sh = shmem;
-  float *X_sh = shmem + blocksize * blocksize;
-
-  uint32_t bid = blockIdx.x;
-
-  load_A<blocksize>(n, A, A_sh);
-  load_B<blocksize>(n, B + bid * blocksize * n, X_sh);
-
-  __syncthreads();
-
-  uint32_t tid = threadIdx.x;
-  uint32_t col_idx = tid % blocksize;
-  uint32_t row_idx = tid / blocksize;
-
-  float *x_row = X_sh + row_idx * blocksize;
-
-  blockSolve_warp<blocksize>(col_idx, n, A_sh, x_row);
-
-  __syncthreads();
-
-  store_X<blocksize>(n, X_sh, X + bid * blocksize * n);
+                                  float *x, float *b) {
+  uint32_t col_idx = blockIdx.x;
+  float *x_col = x + col_idx * n;
+  float *b_col = b + col_idx * n;
+  blockSolve<blocksize>(n, A, x_col, b_col);
 }
 
 template <uint32_t blocksize>
 __global__ void blockSubtract_kernel(uint32_t n, uint32_t k, float const *A,
-                                     float *X, float *B) {
-  extern __shared__ float shmem[];
-  float *A_sh = shmem;
-  float *X_sh = shmem + blocksize * blocksize;
-
-  uint32_t bid = blockIdx.x;
-
-  load_A<blocksize>(n, A, A_sh);
-  load_X<blocksize>(n, X + bid * blocksize * n, X_sh);
-
-  __syncthreads();
-
-  uint32_t tid = threadIdx.x;
-  uint32_t col_idx = tid % blocksize;
-  uint32_t row_idx = tid / blocksize;
-
-  float *x_row = X_sh + row_idx * blocksize;
-  float *b_row = B + bid * blocksize * n + row_idx * n;
-
-  blockSubtract_warp<blocksize>(col_idx, n, A_sh, x_row, b_row);
+                                     float *x, float *b) {
+  uint32_t col_idx = blockIdx.x;
+  float *x_col = x + col_idx * n;
+  float *b_col = b + col_idx * n;
+  blockSubtract<blocksize>(n, A, x_col, b_col);
 }
 
 template <uint32_t blocksize>
@@ -177,7 +142,7 @@ void buildTriangularSolverGraph(cudaGraph_t &graph, int num_blocks,
   for (int i = 0; i < num_blocks - 1; i++)
     subtract_nodes[i].resize(i + 1);
 
-  dim3 gridDim(k_stride / blocksize);
+  dim3 gridDim(k_stride);
   dim3 blockDim(blocksize * blocksize > 1024
                     ? 1024
                     : blocksize * blocksize); // NOTE: may be unnecessary
@@ -191,7 +156,7 @@ void buildTriangularSolverGraph(cudaGraph_t &graph, int num_blocks,
     solve_params.func = (void *)blockSolve_kernel<blocksize>;
     solve_params.gridDim = gridDim;
     solve_params.blockDim = blockDim;
-    solve_params.sharedMemBytes = 2 * sizeof(float) * blocksize * blocksize;
+    solve_params.sharedMemBytes = 0;
 
     void *kernelArgs[5];
     kernelArgs[0] = &n_stride;
@@ -215,7 +180,7 @@ void buildTriangularSolverGraph(cudaGraph_t &graph, int num_blocks,
       sub_params.func = (void *)blockSubtract_kernel<blocksize>;
       sub_params.gridDim = gridDim;
       sub_params.blockDim = blockDim;
-      sub_params.sharedMemBytes = 2 * sizeof(float) * blocksize * blocksize;
+      sub_params.sharedMemBytes = 0;
 
       void *kernelArgs[5];
       kernelArgs[0] = &n_stride;
@@ -241,6 +206,7 @@ void buildTriangularSolverGraph(cudaGraph_t &graph, int num_blocks,
     }
   }
 }
+
 void trsmGraphLaunch(uint32_t n, float *A_d, float *b_d, float *x_d,
                      float *h_x_result) {
 

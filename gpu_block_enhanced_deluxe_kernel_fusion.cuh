@@ -79,13 +79,13 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
 
         // Load Ljj into smem
         float *Ljj = block_cholesky_space::get_block(L, j, j, n, m);
-        block_cholesky_space::gmem_to_smem(Ljj, smem3, n, m);
+        block_cholesky_space::gmem_to_smem_async<m>(Ljj, smem3, n);
         Ljj = smem3;
 
         // TRSM
         float *Lij = smem2;
         float *Aij = smem;
-        trsm_small::block_trsm(Ljj, Lij, Aij, m, m, m, m); // A, X, B
+        trsm_small::block_trsm<m, m, m, m>(Ljj, Lij, Aij);
 
         // Write back Lij
         Lij = block_cholesky_space::get_block(L, i, j, n, m);
@@ -99,7 +99,7 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
             // Chol Aii
             float *Aii = smem;
             float *Lii = smem2;
-            cholesky_small::block_col_cholesky(Aii, Lii, m, m, m);
+            cholesky_small::block_col_cholesky<m, m, m>(Aii, Lii);
 
             // Write back Lii
             Lii = block_cholesky_space::get_block(L, i, i, n, m);

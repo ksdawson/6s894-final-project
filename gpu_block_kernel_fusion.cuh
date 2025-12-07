@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 #include <cstdio>
+#include <cuda_pipeline_primitives.h>
 #include <cuda_runtime.h>
 #include <math.h>
 #include "trsm_small.cuh"
@@ -22,12 +23,6 @@ size_t get_workspace_size(int32_t size) {
 __device__ float* get_block(float *A, const uint32_t i, const uint32_t j, const uint32_t n, const uint32_t m) { return A + i * m * n + j * m; }
 __device__ const float* get_block(const float *A, const uint32_t i, const uint32_t j, const uint32_t n, const uint32_t m) { return A + i * m * n + j * m; }
 
-// This is goated -- Xiaomian
-// input: 
-// gmem: pointer to start of global memory to be written
-// smem: pointer to start of shared memory to be read
-// gmem_w: width of the entire matrix
-// smem_w: width of a block in the matrix to be handled, writing a total of smem_w * smem_w elements
 __device__ void smem_to_gmem(float *gmem, float*smem,
     const uint32_t gmem_w, const uint32_t smem_w
 ) {
@@ -52,33 +47,61 @@ __device__ void smem_to_gmem(float *gmem, float*smem,
     __syncthreads();
 }
 
-// This is goated -- Xiaomian
-// input: 
-// gmem: pointer to start of global memory to be read
-// smem: pointer to start of shared memory to be written
-// gmem_w: width of the entire matrix
-// smem_w: width of a block in the matrix to be handled, writing a total of smem_w * smem_w elements
-__device__ void gmem_to_smem(float *gmem, float*smem,
+__device__ void gmem_to_smem_async(const float *gmem, float*smem,
     const uint32_t gmem_w, const uint32_t smem_w
 ) {
-    // Handle vectors
-    float4 *gmem4 = reinterpret_cast<float4*>(gmem);
-    float4 *smem4 = reinterpret_cast<float4*>(smem);
-    const uint32_t gmem4_w = gmem_w / 4;
-    const uint32_t smem4_w = smem_w / 4;
     for (uint32_t idx = threadIdx.x; idx < smem_w * smem_w / 4; idx += blockDim.x) {
-        const uint32_t i = idx / smem4_w;
-        const uint32_t j = idx % smem4_w;
-        smem4[idx] = gmem4[i * gmem4_w + j];
+        // Get index to copy
+        const uint32_t flat_idx = idx * 4;
+        const uint32_t i = flat_idx / smem_w;
+        const uint32_t j = flat_idx % smem_w;
+        // Copy mem over
+        __pipeline_memcpy_async(&smem[i * smem_w + j], &gmem[i * gmem_w + j], sizeof(float4), 0);
     }
-
-    // Handle tail
-    for (uint32_t idx = (smem_w * smem_w / 4) * 4 + threadIdx.x; idx < smem_w * smem_w; idx += blockDim.x) {
-        const uint32_t i = idx / smem_w;
-        const uint32_t j = idx % smem_w;
-        smem[idx] = gmem[i * gmem_w + j];
+    __pipeline_commit();
+    __pipeline_wait_prior(0);
+    __syncthreads();
+}
+template <uint32_t smem_w>
+__device__ void gmem_to_smem_async(const float *gmem, float*smem, const uint32_t gmem_w) {
+    for (uint32_t idx = threadIdx.x; idx < smem_w * smem_w / 4; idx += blockDim.x) {
+        // Get index to copy
+        const uint32_t flat_idx = idx * 4;
+        const uint32_t i = flat_idx / smem_w;
+        const uint32_t j = flat_idx % smem_w;
+        // Copy mem over
+        __pipeline_memcpy_async(&smem[i * smem_w + j], &gmem[i * gmem_w + j], sizeof(float4), 0);
     }
-
+    __pipeline_commit();
+    __pipeline_wait_prior(0);
+    __syncthreads();
+}
+__device__ void gmem_to_smem_async(const float *gmem1, const float *gmem2,
+    float*smem1, float*smem2,
+    const uint32_t gmem_w, const uint32_t smem_w
+) {
+    for (uint32_t idx = threadIdx.x; idx < smem_w * smem_w / 4; idx += blockDim.x) {
+        const uint32_t flat_idx = idx * 4;
+        const uint32_t i = flat_idx / smem_w;
+        const uint32_t j = flat_idx % smem_w;
+        __pipeline_memcpy_async(&smem1[i * smem_w + j], &gmem1[i * gmem_w + j], sizeof(float4), 0);
+        __pipeline_memcpy_async(&smem2[i * smem_w + j], &gmem2[i * gmem_w + j], sizeof(float4), 0);
+    }
+    __pipeline_commit();
+    __pipeline_wait_prior(0);
+    __syncthreads();
+}
+template <uint32_t smem_w>
+__device__ void gmem_to_smem_async(const float *gmem1, const float *gmem2, float*smem1, float*smem2, const uint32_t gmem_w) {
+    for (uint32_t idx = threadIdx.x; idx < smem_w * smem_w / 4; idx += blockDim.x) {
+        const uint32_t flat_idx = idx * 4;
+        const uint32_t i = flat_idx / smem_w;
+        const uint32_t j = flat_idx % smem_w;
+        __pipeline_memcpy_async(&smem1[i * smem_w + j], &gmem1[i * gmem_w + j], sizeof(float4), 0);
+        __pipeline_memcpy_async(&smem2[i * smem_w + j], &gmem2[i * gmem_w + j], sizeof(float4), 0);
+    }
+    __pipeline_commit();
+    __pipeline_wait_prior(0);
     __syncthreads();
 }
 
@@ -101,36 +124,6 @@ __device__ void gmem_to_smem(const float *gmem, float*smem,
         const uint32_t i = idx / smem_w;
         const uint32_t j = idx % smem_w;
         smem[idx] = gmem[i * gmem_w + j];
-    }
-
-    __syncthreads();
-}
-
-
-__device__ void gmem_to_smem(float *gmem1, float *gmem2,
-    float*smem1, float*smem2,
-    const uint32_t gmem_w, const uint32_t smem_w
-) {
-    // Handle vectors
-    float4 *gmem1_4 = reinterpret_cast<float4*>(gmem1);
-    float4 *gmem2_4 = reinterpret_cast<float4*>(gmem2);
-    float4 *smem1_4 = reinterpret_cast<float4*>(smem1);
-    float4 *smem2_4 = reinterpret_cast<float4*>(smem2);
-    const uint32_t gmem4_w = gmem_w / 4;
-    const uint32_t smem4_w = smem_w / 4;
-    for (uint32_t idx = threadIdx.x; idx < smem_w * smem_w / 4; idx += blockDim.x) {
-        const uint32_t i = idx / smem4_w;
-        const uint32_t j = idx % smem4_w;
-        smem1_4[idx] = gmem1_4[i * gmem4_w + j];
-        smem2_4[idx] = gmem2_4[i * gmem4_w + j];
-    }
-
-    // Handle tail
-    for (uint32_t idx = (smem_w * smem_w / 4) * 4 + threadIdx.x; idx < smem_w * smem_w; idx += blockDim.x) {
-        const uint32_t i = idx / smem_w;
-        const uint32_t j = idx % smem_w;
-        smem1[idx] = gmem1[i * gmem_w + j];
-        smem2[idx] = gmem2[i * gmem_w + j];
     }
 
     __syncthreads();
@@ -258,7 +251,7 @@ __device__ void block_update(const float *A, float *L,
         // Load Lik, Ljk into smem
         float *Lik = get_block(L, i, k, n, m);
         float *Ljk = get_block(L, j, k, n, m);
-        gmem_to_smem(Lik, Ljk, smem1, smem2, n, m);
+        gmem_to_smem_async<m>(Lik, Ljk, smem1, smem2, n);
 
         if (tile_i < N && tile_j < N) {
             block_gemm_naive<m, m, m, T_TH, T_TW>(smem1, smem2, reg, tile_i, tile_j);
@@ -309,7 +302,7 @@ __device__ void diagonal_block_update(const float *A, float *L,
     for (uint32_t k = 0; k < j; ++k) {
         // Load Lik into smem
         float *Lik = get_block(L, i, k, n, m);
-        gmem_to_smem(Lik, smem, n, m);
+        gmem_to_smem_async<m>(Lik, smem, n);
 
         if (tile_i < N && tile_j < N) {
             diagonal_block_gemm_naive<m, m, T_TH, T_TW>(smem, reg, tile_i, tile_j);
@@ -359,7 +352,7 @@ __global__ void block_kernel(const float *A, float *L, // input matrix, Chol mat
         float *Lij = get_block(L, i, j, n, m);
         float *Ljj = get_block(L, j, j, n, m);
         float *Aij = smem;
-        trsm_small::block_trsm(Ljj, Lij, Aij, n, n, m, m); // A, X, B
+        trsm_small::block_trsm<m, m>(Ljj, Lij, Aij, n, n); // A, X, B
     }
 }
 
@@ -382,7 +375,7 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
     // Chol
     float *Ajj = smem;
     float *Ljj = smem2;
-    cholesky_small::block_col_cholesky(Ajj, Ljj, m, m, m);
+    cholesky_small::block_col_cholesky<m, m, m>(Ajj, Ljj);
 
     // Write back Ljj
     Ljj = block_cholesky_space::get_block(L, j, j, n, m);
@@ -456,24 +449,14 @@ void launch_block_cholesky(
     //     launch_specialized_kernel<64, 4, 8>(n, in, out);
     // }
 
-    // Find an m >= 16 that makes n/m = 64
-    uint32_t _n = n;
-    uint32_t _m = 64;
-    while (64 > _n / _m && _m >= 16) {
-        _m /= 2;
-    }
-    if (_m < 16) {
-        _m = 16;
-    }
-
-    // Every time n halves, halve m until m = 16
-    if (_m == 64) {
-        launch_specialized_kernel_dynamic_block<64, 4, 8>(n, in, out, 0, (n/2)/64);
-        launch_specialized_kernel_dynamic_block<32, 2, 8>(n, in, out, (n/2)/32, (3*n/4)/32);
-        launch_specialized_kernel_dynamic_block<16, 1, 8>(n, in, out, (3*n/4)/16, n/16);
-    } else if (_m == 32) {
-        launch_specialized_kernel_dynamic_block<32, 2, 8>(n, in, out, 0, (n/2)/32);
-        launch_specialized_kernel_dynamic_block<16, 1, 8>(n, in, out, (n/2)/16, n/16);
+    // Make sure # blocks never falls below 1/2 # SMs (w/ block size btwn 16 and 64)
+    if (n > 1536 + 64) {
+        launch_specialized_kernel_dynamic_block<64, 2, 32>(n, in, out, 0, (n-1536)/64);
+        launch_specialized_kernel_dynamic_block<32, 2, 8>(n, in, out, (n-1536)/32, (n-768)/32);
+        launch_specialized_kernel_dynamic_block<16, 1, 8>(n, in, out, (n-768)/16, n/16);
+    } else if (n > 768 + 32) {
+        launch_specialized_kernel_dynamic_block<32, 2, 8>(n, in, out, 0, (n-768)/32);
+        launch_specialized_kernel_dynamic_block<16, 1, 8>(n, in, out, (n-768)/16, n/16);
     } else {
         launch_specialized_kernel<16, 1, 8>(n, in, out);
     }
