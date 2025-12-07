@@ -352,7 +352,7 @@ __global__ void block_kernel(const float *A, float *L, // input matrix, Chol mat
         float *Lij = get_block(L, i, j, n, m);
         float *Ljj = get_block(L, j, j, n, m);
         float *Aij = smem;
-        trsm_small::block_trsm<m, m>(Ljj, Lij, Aij, n, n); // A, X, B
+        trsm_small::block_trsm_reuse<W, m, m>(Ljj, Lij, Aij, n, n); // A, X, B
     }
 }
 
