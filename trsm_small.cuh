@@ -83,7 +83,7 @@ __global__ void trsm_kernel(uint32_t n, uint32_t r, const float *A, float *X,
 // Block methods
 
 template <bool x_row, bool b_row>
-__device__ void block_forward_substitution(float const *A, float *x, float const *b,
+__device__ void block_forward_substitution(const float *A, float *x, const float *b,
   const uint32_t A_n, const uint32_t x_n, const uint32_t b_n,
   const uint32_t r
 ) {
@@ -118,7 +118,7 @@ __device__ void block_forward_substitution(float const *A, float *x, float const
   }
 }
 template <bool x_row, bool b_row, uint32_t A_n, uint32_t x_n, uint32_t b_n, uint32_t r>
-__device__ void block_forward_substitution(float const *A, float *x, float const *b) {
+__device__ void block_forward_substitution(const float *A, float *x, const float *b) {
   // Use local thread idx as this is done at the warp level
   const uint32_t thread_idx = threadIdx.x % 32;
   #pragma unroll
@@ -139,7 +139,7 @@ __device__ void block_forward_substitution(float const *A, float *x, float const
   }
 }
 template <bool x_row, bool b_row, uint32_t b_n, uint32_t r>
-__device__ void block_forward_substitution(float const *A, float *x, float const *b,
+__device__ void block_forward_substitution(const float *A, float *x, const float *b,
   const uint32_t A_n, const uint32_t x_n
 ) {
   // Use local thread idx as this is done at the warp level
@@ -162,42 +162,81 @@ __device__ void block_forward_substitution(float const *A, float *x, float const
   }
 }
 
-// template <uint32_t W, uint32_t A_n, uint32_t X_n, uint32_t B_n, uint32_t r>
-// __device__ void new_block_trsm(float const *A, float *X, float const *B) {
-//   // Use local thread idx as this is done at the warp level
-//   const uint32_t thread_idx = threadIdx.x % 32;
-//   for (uint32_t i = 0; i < r; ++i) {
-//     // Each thread computes a piece of each sum
-//     float partial_sum[r/W] = {0.0f};
-//     for (uint32_t j = thread_idx; j < i; j += 32) {
-//       const float a = A[i * A_n + j];
-//       for (uint32_t idx = 0; idx < r/W; ++idx) {
-//         float *x = X[(idx * W) * X_n];
-//         partial_sum[idx] += a * x[j];
-//       }
-//     }
-//     // Combine the sums across the warp
-//     for (uint32_t idx = 0; idx < r/W; ++idx) {
-//       float sum = utils::warp_prefix_sum<float>(partial_sum[idx]);
-//       // Last thread handles writing it back
-//       if (thread_idx == 31) {
-//         float *x = X[(idx * W) * X_n];
-//         float *b = B[(idx * W) * B_n];
-//         x[i] = (b[i] - sum) / A[i * A_n + i];
-//       }
-//     }
-//     // All threads need this iteration to be done
-//     __syncwarp();
-//   }
-// }
-__device__ void block_trsm(float const *A, float *X, float const *B,
+template <uint32_t W, uint32_t A_n, uint32_t X_n, uint32_t B_n, uint32_t r>
+__device__ void block_trsm_reuse(float *A, float *X, float *B) {
+  // Use local thread idx as this is done at the warp level
+  const uint32_t thread_idx = threadIdx.x % 32;
+  constexpr uint32_t rows_per_warp = r / W;
+  #pragma unroll
+  for (uint32_t i = 0; i < r; ++i) {
+    // Each thread computes a piece of each sum
+    float partial_sum[rows_per_warp] = {0.0f};
+    for (uint32_t j = thread_idx; j < i; j += 32) {
+      const float a = A[i * A_n + j];
+      #pragma unroll
+      for (uint32_t idx = 0; idx < rows_per_warp; ++idx) {
+        float *x = X + (idx * W) * X_n;
+        partial_sum[idx] += a * x[j];
+      }
+    }
+    // Combine the sums across the warp
+    #pragma unroll
+    for (uint32_t idx = 0; idx < rows_per_warp; ++idx) {
+      const float sum = utils::warp_prefix_sum<float>(partial_sum[idx]);
+      // Last thread handles writing it back
+      if (thread_idx == 31) {
+        float *x = X + (idx * W) * X_n;
+        const float *b = B + (idx * W) * B_n;
+        x[i] = (b[i] - sum) / A[i * A_n + i];
+      }
+    }
+    // All threads need this iteration to be done
+    __syncwarp();
+  }
+}
+template <uint32_t W, uint32_t B_n, uint32_t r>
+__device__ void block_trsm_reuse(float *A, float *X, float *B,
+  const uint32_t A_n, const uint32_t X_n
+) {
+  // Use local thread idx as this is done at the warp level
+  const uint32_t thread_idx = threadIdx.x % 32;
+  constexpr uint32_t rows_per_warp = r / W;
+  #pragma unroll
+  for (uint32_t i = 0; i < r; ++i) {
+    // Each thread computes a piece of each sum
+    float partial_sum[rows_per_warp] = {0.0f};
+    for (uint32_t j = thread_idx; j < i; j += 32) {
+      const float a = A[i * A_n + j];
+      #pragma unroll
+      for (uint32_t idx = 0; idx < rows_per_warp; ++idx) {
+        float *x = X + (idx * W) * X_n;
+        partial_sum[idx] += a * x[j];
+      }
+    }
+    // Combine the sums across the warp
+    #pragma unroll
+    for (uint32_t idx = 0; idx < rows_per_warp; ++idx) {
+      const float sum = utils::warp_prefix_sum<float>(partial_sum[idx]);
+      // Last thread handles writing it back
+      if (thread_idx == 31) {
+        float *x = X + (idx * W) * X_n;
+        const float *b = B + (idx * W) * B_n;
+        x[i] = (b[i] - sum) / A[i * A_n + i];
+      }
+    }
+    // All threads need this iteration to be done
+    __syncwarp();
+  }
+}
+
+__device__ void block_trsm(const float *A, float *X, const float *B,
   const uint32_t A_n, const uint32_t X_n, const uint32_t B_n,
   const uint32_t r
 ) {
   // Done at the SM level
   for (uint32_t i = threadIdx.x / 32; i < r; i += blockDim.x / 32) {
     float *x = X + i * X_n; // row
-    float const *b = B + i * B_n; // row
+    const float *b = B + i * B_n; // row
     block_forward_substitution<true, true>(A, x, b, A_n, X_n, B_n, r);
   }
 
@@ -206,11 +245,11 @@ __device__ void block_trsm(float const *A, float *X, float const *B,
 }
 
 template <uint32_t A_n, uint32_t X_n, uint32_t B_n, uint32_t r>
-__device__ void block_trsm(float const *A, float *X, float const *B) {
+__device__ void block_trsm(const float *A, float *X, const float *B) {
   // Done at the SM level
   for (uint32_t i = threadIdx.x / 32; i < r; i += blockDim.x / 32) {
     float *x = X + i * X_n; // row
-    float const *b = B + i * B_n; // row
+    const float *b = B + i * B_n; // row
     block_forward_substitution<true, true, A_n, X_n, B_n, r>(A, x, b);
   }
 
@@ -218,13 +257,13 @@ __device__ void block_trsm(float const *A, float *X, float const *B) {
   __syncthreads();
 }
 template <uint32_t B_n, uint32_t r>
-__device__ void block_trsm(float const *A, float *X, float const *B,
+__device__ void block_trsm(const float *A, float *X, const float *B,
   const uint32_t A_n, const uint32_t X_n
 ) {
   // Done at the SM level
   for (uint32_t i = threadIdx.x / 32; i < r; i += blockDim.x / 32) {
     float *x = X + i * X_n; // row
-    float const *b = B + i * B_n; // row
+    const float *b = B + i * B_n; // row
     block_forward_substitution<true, true, B_n, r>(A, x, b, A_n, X_n);
   }
 
