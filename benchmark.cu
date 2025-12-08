@@ -1086,16 +1086,16 @@ int main(int argc, char **argv) {
     auto configs_triblock = std::vector<BenchmarkConfig>{
         {1024, 32},
         {1024, 64},
-        // {1024, 128},
-        // {1024, 256},
-        // {1024, 512},
-        // {1024, 1024}
+        {1024, 128},
+        {1024, 256},
+        {1024, 512},
+        {1024, 1024}
     };
     auto data_triblock = generate_test_data(configs_triblock, Phase::TRIBLOCK_SMALL, Solver::CHOLESKY_TRIBLOCK);
-    run_all_impls(Phase::TRIBLOCK_SMALL, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
+    //run_all_impls(Phase::TRIBLOCK_SMALL, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
     run_all_impls(Phase::TRIBLOCK, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
-    //run_all_impls(Phase::CUSOLVER_POTRF, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
-    //run_all_impls(Phase::ENHANCED_DELUXE_CHOLESKY, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
+    run_all_impls(Phase::CUSOLVER_POTRF, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
+    run_all_impls(Phase::ENHANCED_DELUXE_CHOLESKY, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
 
     //can compute speedups later if needed -- XY
     // for (int32_t j = 1; j < results.size(); ++j) {

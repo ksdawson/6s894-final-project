@@ -70,6 +70,51 @@ __device__ void triblock_update(const float *Aii, float *smem, const uint32_t N,
 // N: total dimension of the matrix now!!!!!!!!! different from cholesky_trsm_combined
 // block_n: dimension of each block in triblock diagonal
 // note: currently can only handle block_n <=32, this naive version need to be optimized with better shared memory or register reuse
+template <uint32_t block_n, uint32_t T_TH, uint32_t T_TW>
+__global__ void triblock_2(const uint32_t N, float const *in, float *out) {
+    extern __shared__ float shared_mem[];
+
+    float *smem1 = shared_mem;
+    float *smem2 = smem1 + block_n * block_n;
+    float *smem3 = smem2 + block_n * block_n;
+    const int32_t num_blocks = (int32_t)(N / block_n);
+
+    // store A00 into smem2
+    const float *gmem = in;
+    block_cholesky_space::gmem_to_smem(gmem, smem2, N, block_n);
+    cholesky_small::block_col_cholesky(smem2, smem1, block_n, block_n, block_n);
+    // compute cholesky and store in smem1
+    block_cholesky_space::smem_to_gmem(out, smem1, N, block_n);
+
+    const float *A;
+    float *Lii;
+    float *Lij;
+
+    for (uint32_t i = 1; i < num_blocks; ++i) {
+
+        // trsm
+        // store A_(i,i-1) into smem2
+        A = block_cholesky_space::get_block(in, i, i-1, N, block_n);
+        block_cholesky_space::gmem_to_smem(A, smem2, N, block_n);
+
+        // compute trsm and store in smem3
+        trsm_small::block_trsm(smem1, smem3, smem2, block_n, block_n, block_n, block_n); // A, X, B
+        Lij = block_cholesky_space::get_block(out, i, i-1, N, block_n);
+        block_cholesky_space::smem_to_gmem(Lij, smem3, N, block_n);
+
+        // gemm A_(i,i) - L_(i,i-1) * L_(i,i-1)^T
+        // compute gemm and store in smem3
+        A = block_cholesky_space::get_block(in, i, i, N, block_n);
+        triblock_update<T_TH, T_TW>(A, smem3, N, block_n, i);
+
+
+        // cholesky L_(i,i), store in smem1
+        cholesky_small::block_col_cholesky(smem3, smem1, block_n, block_n, block_n);
+        Lii = block_cholesky_space::get_block(out, i, i, N, block_n);
+        block_cholesky_space::smem_to_gmem(Lii, smem1, N, block_n);
+    }
+}
+
 template <uint32_t T_TH, uint32_t T_TW>
 __global__ void triblock_2(const uint32_t N, const uint32_t block_n, float const *in, float *out) {
     extern __shared__ float shared_mem[];
@@ -85,13 +130,6 @@ __global__ void triblock_2(const uint32_t N, const uint32_t block_n, float const
     cholesky_small::block_col_cholesky(smem2, smem1, block_n, block_n, block_n);
     // compute cholesky and store in smem1
     block_cholesky_space::smem_to_gmem(out, smem1, N, block_n);
-    // if (threadIdx.x == 0) {
-    //     for (uint32_t i = 0; i < block_n; ++i) {
-    //         for (uint32_t j = 0; j < block_n; ++j) {
-    //             printf("smem1[%u, %u] = %f\n", i, j, smem1[i * N + j]);
-    //         }
-    //     }
-    // }
 
     const float *A;
     float *Lii;
@@ -127,10 +165,10 @@ void launch_triblock_small(const uint32_t N, const uint32_t block_n, float const
     if (block_n == 32) {
         uint32_t shared_mem_size = 64*64*3 * sizeof(float);
         CUDA_CHECK(cudaFuncSetAttribute(
-            triblock_2<1, 1>,
+            triblock_2<32, 1, 1>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             shared_mem_size));
-        triblock_2<1, 1><<<1, 32 * 32, shared_mem_size>>>(N, block_n, in, out);
+        triblock_2<32, 1, 1><<<1, 32 * 32, shared_mem_size>>>(N, in, out);
     } else if (block_n == 64) {
         uint32_t shared_mem_size = 64*64*3 * sizeof(float);
         CUDA_CHECK(cudaFuncSetAttribute(

@@ -129,6 +129,30 @@ __device__ void gmem_to_smem(const float *gmem, float*smem,
     __syncthreads();
 }
 
+__device__ void gmem_to_smem(const float *gmem, float*smem,
+    const uint32_t gmem_w, const uint32_t smem_w, const uint32_t smem_h
+) {
+    // Handle vectors
+    const float4 *gmem4 = reinterpret_cast<const float4*>(gmem);
+    float4 *smem4 = reinterpret_cast<float4*>(smem);
+    const uint32_t gmem4_w = gmem_w / 4;
+    const uint32_t smem4_w = smem_w / 4;
+    for (uint32_t idx = threadIdx.x; idx < smem_w * smem_h / 4; idx += blockDim.x) {
+        const uint32_t i = idx / smem4_w;
+        const uint32_t j = idx % smem4_w;
+        smem4[idx] = gmem4[i * gmem4_w + j];
+    }
+
+    // Handle tail
+    for (uint32_t idx = (smem_w * smem_h / 4) * 4 + threadIdx.x; idx < smem_w * smem_h; idx += blockDim.x) {
+        const uint32_t i = idx / smem_w;
+        const uint32_t j = idx % smem_w;
+        smem[idx] = gmem[i * gmem_w + j];
+    }
+
+    __syncthreads();
+}
+
 __device__ void gmem_to_smem(const float *gmem1, const float *gmem2,
     float*smem1, float*smem2,
     const uint32_t gmem_w, const uint32_t smem_w
@@ -191,6 +215,7 @@ __device__ void gmem_to_smem(float *gmem1, float *gmem2,
 ////////////////////////////////////////////////////////////////////////////////
 // Device functions
 
+// computes C = A * A^T
 template <uint32_t T_TH, uint32_t T_TW>
 __device__ void diagonal_block_gemm_naive(float *A, float* C,
     const uint A_n, const uint32_t r,
@@ -268,6 +293,7 @@ __device__ void diagonal_block_gemm_naive(float *A, float* C,
     }
 }
 
+// computes C = A * B^T
 template <uint32_t A_n, uint32_t B_n, uint32_t r, uint32_t T_TH, uint32_t T_TW>
 __device__ void block_gemm_naive(float *A, float *B, float* C,
     const uint32_t tile_i, const uint32_t tile_j

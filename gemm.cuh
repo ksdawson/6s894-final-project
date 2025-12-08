@@ -188,6 +188,134 @@ __device__ void block_gemm_naive(float *A, float *B, float* C,
     }
 }
 
+__device__ void gemm_tensor_copytoreg(
+    float *smem1, float *smem2, 
+    float *reg_A, float *reg_B, 
+    const uint32_t padding) {
+    
+    const uint32_t thread_ID = threadIdx.x % 32;
+
+    const uint32_t thread_Ai = thread_ID / 4;
+    const uint32_t thread_Aj = thread_ID % 4;
+    reg_A[0] = smem1[thread_Ai * padding + thread_Aj];
+    reg_A[1] = smem1[thread_Ai * padding + thread_Aj + 4];
+    reg_A[2] = smem1[thread_Ai * padding + thread_Aj + 8*padding];
+    reg_A[3] = smem1[thread_Ai * padding + thread_Aj + 8*padding + 4];
+
+    const uint32_t thread_Bi = thread_ID / 4;
+    const uint32_t thread_Bj = thread_ID % 4;
+    reg_B[0] = smem2[thread_Bi * padding + thread_Bj];
+    reg_B[1] = smem2[thread_Bi * padding + thread_Bj + 4];
+}
+
+__device__ void gemm_tensor_copytomem(
+    float *mem, float *reg, const uint32_t padding) {
+    
+    const uint32_t thread_ID = threadIdx.x % 32;
+    
+    const uint32_t thread_i = thread_ID / 4;
+    const uint32_t thread_j = thread_ID % 4;
+
+    mem[thread_i * padding + thread_j * 2] -= reg[0];
+    mem[thread_i * padding + thread_j * 2 + 1] -= reg[1];
+    mem[thread_i * padding + thread_j * 2 + 8*padding] -= reg[2];
+    mem[thread_i * padding + thread_j * 2 + 8*padding + 1] -= reg[3];
+}
+
+template <uint32_t W_TH, uint32_t num_threads_H>
+__device__ void gemm_tensor_warp(float *smem1, float *smem2, float *reg_A, float *reg_B, float *reg_C,
+    const uint32_t warp_tile_i, const uint32_t warp_tile_j, const uint32_t padding) {
+    
+    constexpr uint32_t warp_W = 8;
+    constexpr uint32_t warp_H = 16;
+    for (uint32_t k_strides = 0; k_strides < padding; k_strides += 8) {
+        // pointer to the right start for smem1 and smem2
+        float *A = smem1 + warp_tile_i * warp_H * W_TH * padding + k_strides;
+        float *B = smem2 + warp_tile_j * warp_W * W_TH * padding + k_strides;
+        
+        // copy smem to registers
+        for (uint32_t i = 0; i < W_TH; ++i) {
+            float *A_i = A + i * warp_H * padding;
+            float *B_i = B + i * warp_W * padding;
+            gemm_tensor_copytoreg(A_i, B_i, 
+                reg_A + i * 4, reg_B + i * 2, padding);
+        }
+
+        // perform tensor core operation
+        for (uint32_t wi = 0; wi < W_TH; ++wi) {
+            for (uint32_t wj = 0; wj < W_TH; ++wj) {
+                int c_ind = (wi * W_TH + wj) * 4;
+                asm volatile(
+                    "mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32 "
+                    "{%0, %1, %2, %3}, "
+                    "{%4, %5, %6, %7}, "
+                    "{%8, %9}, "
+                    "{%10, %11, %12, %13};"
+                    : "=f"(reg_C[c_ind]), "=f"(reg_C[c_ind + 1]), "=f"(reg_C[c_ind + 2]), "=f"(reg_C[c_ind + 3])
+                    : "r"(reg_A[wi * 4]), "r"(reg_A[wi * 4 + 1]), "r"(reg_A[wi * 4 + 2]), "r"(reg_A[wi * 4 + 3]),
+                        "r"(reg_B[wj * 2]), "r"(reg_B[wj * 2 + 1]),
+                        "f"(reg_C[c_ind]), "f"(reg_C[c_ind + 1]), "f"(reg_C[c_ind + 2]), "f"(reg_C[c_ind + 3])
+                );
+                
+            }
+        }
+        
+    } 
+}
+
+// GEMM with tensor core, each block works on 64x64 tiles with 8 warps
+template <uint32_t W_TH, uint32_t num_threads_H>
+__device__ void gemm_tensor(float *X, float *A, float *smem1, float *smem2, float *reg,
+    const uint32_t block_tile_i, const uint32_t block_tile_j, const uint32_t N, const uint32_t block_n) {
+
+    constexpr uint32_t warp_H = 16;
+    constexpr uint32_t warp_W = 8;
+    constexpr uint32_t warp_rows = 2;
+    const uint32_t block_size_H = warp_H * W_TH * warp_rows;
+    
+    const uint32_t warp_ID = threadIdx.x / 32;
+    const uint32_t warp_tile_i = warp_ID / 4;
+    const uint32_t warp_tile_j = warp_ID % 4; // assuming 8 warps, so 2x4 tiles in block
+
+    // maybe specialize writeback for diagonal blocks?
+    // const bool diagonal_write = (block_tile_i == block_tile_j);
+    const bool valid_block = (block_tile_i < block_n / block_size_H) && (block_tile_j < block_n / block_size_H);
+    
+    if (valid_block) {
+        float *X_i = X + block_tile_i * block_size_H * N;
+        float *X_j = X + block_tile_j * block_size_H * N;
+        float *A_ij = A + block_tile_i * block_size_H * N + block_tile_j * block_size_H;
+
+        float *reg_Xi = reg;
+        float *reg_Xj = reg + 4 * W_TH;
+        float *reg_Aij = reg + 6 * W_TH;
+
+        for (uint32_t k = 0; k < block_n; k += block_size_H) {
+
+            // copy X to smem
+            block_cholesky_space::gmem_to_smem(X_i + k, X_j + k, smem1, smem2, N, block_size_H);
+            __syncthreads();
+
+            // solve matrix using tensor core
+            gemm_tensor_warp<W_TH, num_threads_H>(smem1, smem2, reg_Xi, reg_Xj, reg_Aij, warp_tile_i, warp_tile_j, block_size_H);
+            __syncthreads();
+        }
+
+        // move to warp tile for A_ij
+        float *A_ij_warp = A_ij + warp_tile_i * warp_H * W_TH * N + warp_tile_j * warp_W * W_TH;
+
+        // copy register values back to gmem
+        for (uint32_t wi = 0; wi < W_TH; ++wi) {
+            for (uint32_t wj = 0; wj < W_TH; ++wj) {
+                int c_ind = (wi * W_TH + wj) * 4;
+                gemm_tensor_copytomem(A_ij_warp + wi * warp_H * N + wj * warp_W, reg_Aij + c_ind, N);
+            }
+        }
+        __syncthreads();
+    }
+    
+}
+
 
 template <uint32_t T_TH, uint32_t num_threads_H>
 __device__ void triblock_gemm_GPUblock(float *X, float *A, float *smem1, float *smem2, float *reg,
@@ -290,6 +418,23 @@ __device__ void triblock_diag_gemm_GPUblock(float *X, float *A,float *smem1, flo
         }
         __syncthreads();
     }
+}
+
+// requires shared memory of size at least (T_TH * num_threads_H)^2
+template <uint32_t W_TH, uint32_t num_threads_H>
+__global__ void triblock_tensor_gemm(float *A, float *X, const uint32_t N, const uint32_t block_n, const uint32_t smem_size_bytes) {
+    extern __shared__ float smem[];
+
+    float reg[4 * W_TH + 2*W_TH + 4*W_TH*W_TH] = {0.0f};
+
+    // Map rectangular to triangular tiles
+    const uint32_t block_tile_i = (uint32_t)((sqrtf(8.f * blockIdx.x + 1.f) - 1.f) * 0.5f);
+    const uint32_t block_tile_j = blockIdx.x - (block_tile_i * (block_tile_i + 1) / 2);
+
+    float *smem1 = smem;
+    float *smem2 = smem + smem_size_bytes / (2 * sizeof(float));
+
+    gemm_tensor<W_TH, num_threads_H>(X, A, smem1, smem2, reg, block_tile_i, block_tile_j, N, block_n);
 }
 
 // requires shared memory of size at least (T_TH * num_threads_H)^2
