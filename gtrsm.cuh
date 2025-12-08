@@ -298,6 +298,31 @@ void launch_trsm(uint32_t n, int32_t r, const float *A, float *x, float *b,
   cudaGraphDestroy(graph);
 }
 
+void set_cuda_graph_trsm(uint32_t n, int32_t r, const float *A, float *x,
+                         float *b, void *workspace,
+                         cudaGraphExec_t *instance_ptr) {
+
+  constexpr uint32_t blocksize = 32;
+  uint32_t numblocks = n / blocksize;
+
+  cudaGraph_t graph;
+  CUDA_CHECK(cudaGraphCreate(&graph, 0));
+
+  buildTriangularSolverGraph<blocksize>(graph, numblocks, n, r, A, x, b);
+
+  CUDA_CHECK(cudaGraphInstantiate(&instance_ptr, graph, NULL, NULL, 0));
+
+  cudaGraphDestroy(graph);
+}
+
+void launch_cuda_graph_trsm(cudaGraphExec_t *instance) {
+  cudaGraphLaunch(*instance, 0);
+}
+
+void invalidate_cuda_graph_trsm(cudaGraphExec_t *instance) {
+  cudaGraphExecDestroy(*instance);
+}
+
 void trsmCublasLaunch(cublasHandle_t handle, uint32_t n, float *A_d, float *b_d,
                       float *h_x_result) {
 
