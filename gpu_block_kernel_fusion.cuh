@@ -190,6 +190,46 @@ __device__ void gmem_to_smem(float *gmem1, float *gmem2,
 
 ////////////////////////////////////////////////////////////////////////////////
 // Device functions
+
+template <uint32_t T_TH, uint32_t T_TW>
+__device__ void diagonal_block_gemm_naive(float *A, float* C,
+    const uint A_n, const uint32_t r,
+    const uint32_t tile_i, const uint32_t tile_j
+) {
+    // Move to subtile
+    float *_A = A + tile_i * T_TH * A_n;
+    float *_B = A + tile_j * T_TH * A_n;
+
+    // Each thread handles a tile
+    for (uint32_t tk = 0; tk < r; tk += 4) {
+        #pragma unroll
+        for (uint32_t ti = 0; ti < T_TH; ++ti) {
+            const float4 a = *(reinterpret_cast<float4*>(_A + ti * A_n + tk));
+            #pragma unroll
+            for (uint32_t tj = 0; tj < (tile_i == tile_j ? ti+1 : T_TW); ++tj) {
+                if ((_A + ti * A_n + tk) == (_B + tj * A_n + tk)) {
+                    // If i==j reuse a
+                    C[ti * T_TW + tj] += (a.x * a.x + a.y * a.y + a.z * a.z + a.w * a.w);
+                    continue;
+                }
+                const float4 b = *(reinterpret_cast<float4*>(_B + tj * A_n + tk));
+                C[ti * T_TW + tj] += (a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w);
+            }
+        }
+    }
+    // Handle tail
+    for (uint32_t tk = (r / 4) * 4; tk < r; ++tk) {
+        #pragma unroll
+        for (uint32_t ti = 0; ti < T_TH; ++ti) {
+            const float a = _A[ti * A_n + tk];
+            #pragma unroll
+            for (uint32_t tj = 0; tj < (tile_i == tile_j ? ti+1 : T_TW); ++tj) {
+                C[ti * T_TW + tj] += a * _B[tj * A_n + tk];
+            }
+        }
+    }
+}
+
 template <uint32_t A_n, uint32_t r, uint32_t T_TH, uint32_t T_TW>
 __device__ void diagonal_block_gemm_naive(float *A, float* C,
     const uint32_t tile_i, const uint32_t tile_j

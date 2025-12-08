@@ -97,29 +97,29 @@ __global__ void triblock_2(const uint32_t N, const uint32_t block_n, float const
     float *Lii;
     float *Lij;
 
-    // for (uint32_t i = 1; i < num_blocks; ++i) {
+    for (uint32_t i = 1; i < num_blocks; ++i) {
 
-    //     // trsm
-    //     // store A_(i,i-1) into smem2
-    //     A = block_cholesky_space::get_block(in, i, i-1, N, block_n);
-    //     block_cholesky_space::gmem_to_smem(A, smem2, N, block_n);
+        // trsm
+        // store A_(i,i-1) into smem2
+        A = block_cholesky_space::get_block(in, i, i-1, N, block_n);
+        block_cholesky_space::gmem_to_smem(A, smem2, N, block_n);
 
-    //     // compute trsm and store in smem3
-    //     trsm_small::block_trsm(smem1, smem3, smem2, block_n, block_n, block_n, block_n); // A, X, B
-    //     Lij = block_cholesky_space::get_block(out, i, i-1, N, block_n);
-    //     block_cholesky_space::smem_to_gmem(Lij, smem3, N, block_n);
+        // compute trsm and store in smem3
+        trsm_small::block_trsm(smem1, smem3, smem2, block_n, block_n, block_n, block_n); // A, X, B
+        Lij = block_cholesky_space::get_block(out, i, i-1, N, block_n);
+        block_cholesky_space::smem_to_gmem(Lij, smem3, N, block_n);
 
-    //     // gemm A_(i,i) - L_(i,i-1) * L_(i,i-1)^T
-    //     // compute gemm and store in smem3
-    //     A = block_cholesky_space::get_block(in, i, i, N, block_n);
-    //     triblock_update<T_TH, T_TW>(A, smem3, N, block_n, i);
+        // gemm A_(i,i) - L_(i,i-1) * L_(i,i-1)^T
+        // compute gemm and store in smem3
+        A = block_cholesky_space::get_block(in, i, i, N, block_n);
+        triblock_update<T_TH, T_TW>(A, smem3, N, block_n, i);
 
 
-    //     // cholesky L_(i,i), store in smem1
-    //     cholesky_small::block_col_cholesky(smem3, smem1, block_n, block_n, block_n);
-    //     Lii = block_cholesky_space::get_block(out, i, i, N, block_n);
-    //     block_cholesky_space::smem_to_gmem(Lii, smem1, N, block_n);
-    // }
+        // cholesky L_(i,i), store in smem1
+        cholesky_small::block_col_cholesky(smem3, smem1, block_n, block_n, block_n);
+        Lii = block_cholesky_space::get_block(out, i, i, N, block_n);
+        block_cholesky_space::smem_to_gmem(Lii, smem1, N, block_n);
+    }
 }
 
 // only works for block_n <= 64

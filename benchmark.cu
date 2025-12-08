@@ -1085,7 +1085,7 @@ int main(int argc, char **argv) {
 
     auto configs_triblock = std::vector<BenchmarkConfig>{
         {1024, 32},
-        {64, 64},
+        {1024, 64},
         // {1024, 128},
         // {1024, 256},
         // {1024, 512},
