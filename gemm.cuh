@@ -190,22 +190,22 @@ __device__ void block_gemm_naive(float *A, float *B, float* C,
 
 __device__ void gemm_tensor_copytoreg(
     float *smem1, float *smem2, 
-    float *reg_A, float *reg_B, 
+    uint32_t *reg_A, uint32_t *reg_B, 
     const uint32_t padding) {
     
     const uint32_t thread_ID = threadIdx.x % 32;
 
     const uint32_t thread_Ai = thread_ID / 4;
     const uint32_t thread_Aj = thread_ID % 4;
-    reg_A[0] = smem1[thread_Ai * padding + thread_Aj];
-    reg_A[1] = smem1[thread_Ai * padding + thread_Aj + 4];
-    reg_A[2] = smem1[thread_Ai * padding + thread_Aj + 8*padding];
-    reg_A[3] = smem1[thread_Ai * padding + thread_Aj + 8*padding + 4];
+    reg_A[0] = __float_as_uint(smem1[thread_Ai * padding + thread_Aj]);
+    reg_A[1] = __float_as_uint(smem1[thread_Ai * padding + thread_Aj + 4]);
+    reg_A[2] = __float_as_uint(smem1[thread_Ai * padding + thread_Aj + 8*padding]);
+    reg_A[3] = __float_as_uint(smem1[thread_Ai * padding + thread_Aj + 8*padding + 4]);
 
     const uint32_t thread_Bi = thread_ID / 4;
     const uint32_t thread_Bj = thread_ID % 4;
-    reg_B[0] = smem2[thread_Bi * padding + thread_Bj];
-    reg_B[1] = smem2[thread_Bi * padding + thread_Bj + 4];
+    reg_B[0] = __float_as_uint(smem2[thread_Bi * padding + thread_Bj]);
+    reg_B[1] = __float_as_uint(smem2[thread_Bi * padding + thread_Bj + 4]);
 }
 
 __device__ void gemm_tensor_copytomem(
@@ -223,7 +223,7 @@ __device__ void gemm_tensor_copytomem(
 }
 
 template <uint32_t W_TH, uint32_t num_threads_H>
-__device__ void gemm_tensor_warp(float *smem1, float *smem2, float *reg_A, float *reg_B, float *reg_C,
+__device__ void gemm_tensor_warp(float *smem1, float *smem2, uint32_t *reg_A, uint32_t *reg_B, float *reg_C,
     const uint32_t warp_tile_i, const uint32_t warp_tile_j, const uint32_t padding) {
     
     constexpr uint32_t warp_W = 8;
@@ -286,8 +286,8 @@ __device__ void gemm_tensor(float *X, float *A, float *smem1, float *smem2, floa
         float *X_j = X + block_tile_j * block_size_H * N;
         float *A_ij = A + block_tile_i * block_size_H * N + block_tile_j * block_size_H;
 
-        float *reg_Xi = reg;
-        float *reg_Xj = reg + 4 * W_TH;
+        uint32_t *reg_Xi = reinterpret_cast<uint32_t*>(reg);
+        uint32_t *reg_Xj = reinterpret_cast<uint32_t*>(reg + 4 * W_TH);
         float *reg_Aij = reg + 6 * W_TH;
 
         for (uint32_t k = 0; k < block_n; k += block_size_H) {

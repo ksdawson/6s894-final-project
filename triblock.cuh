@@ -255,7 +255,50 @@ size_t get_workspace_size(int32_t size) {
 // W: number of warps
 // T_TS: number of tiles for GEMM
 // have to ensure that T_TS * sqrt(W*32) = block_n because W*32 threads work on one tile in GEMM
-template <uint32_t m, uint32_t W, uint32_t chol_T_TS, uint32_t block_T_TS, uint32_t trsm_T_TS, uint32_t smem_size_bytes, uint32_t block_smem_size_bytes, uint32_t trsm_smem_size_bytes>
+template <uint32_t m, uint32_t W, uint32_t chol_T_TS, uint32_t GEMM_W_TS, uint32_t trsm_T_TS, uint32_t smem_size_bytes, uint32_t GEMM_smem_size_bytes, uint32_t trsm_smem_size_bytes, uint32_t GEMM_block_size>
+void triblock_tensor(const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace) {
+    const int32_t num_blocks = (int32_t)(N / block_n);
+
+    const int32_t tiles_per_dim_GEMM = block_n / GEMM_block_size;
+    const int32_t num_GPU_blocks_GEMM = tiles_per_dim_GEMM * (tiles_per_dim_GEMM + 1) / 2;
+    const int32_t num_threads_GEMM = m * m;
+    
+    const int32_t trsm_r = m * trsm_T_TS;
+    const int32_t num_GPU_blocks_TRSM = block_n / trsm_r;  // One block per row-block of X
+    const int32_t num_threads_TRSM = m * m;  // Threads per GPU block
+
+    // solve A00 using block cholesky and update out
+    triblock_helper::triblock_block_cholesky<m, W, chol_T_TS, chol_T_TS, smem_size_bytes>(N, block_n, in, out, 0);
+
+    // loop through all other row blocks
+    for (uint32_t i = 1; i < num_blocks; ++i) {
+        
+        float *A = triblock_helper::get_block(out, i-1, i-1, N, block_n);
+        float *X = triblock_helper::get_block(out, i, i-1, N, block_n);
+        float const *B = triblock_helper::get_block(in, i, i-1, N, block_n);
+
+        // // solve block TRSM and update out
+        // trsm_small::triblock_block_trsm_naive<W><<<48, W*32>>>(A, X, B, 
+        //    N, N, N, block_n);
+        triblock_helper::triblock_block_trsm<trsm_T_TS, trsm_r><<<num_GPU_blocks_TRSM, num_threads_TRSM, trsm_smem_size_bytes*3>>>(A, X, B, N, N, N, block_n);
+
+        // Big GEMM update and update in, unfortunately
+        // computes A_ii - XX^T
+        
+        const float *A_ii = triblock_helper::get_block(in, i, i, N, block_n);
+        gemm::triblock_tensor_gemm<GEMM_W_TS, m><<<num_GPU_blocks_GEMM, num_threads_GEMM, GEMM_smem_size_bytes*2>>>(const_cast<float*>(A_ii), X, N, block_n, GEMM_smem_size_bytes*2);
+
+        // solve block Cholesky again and update out
+        triblock_helper::triblock_block_cholesky<m, W, chol_T_TS, chol_T_TS, smem_size_bytes>(N, block_n, in, out, i);
+
+    }
+
+}
+
+// W: number of warps
+// T_TS: number of tiles for GEMM
+// have to ensure that T_TS * sqrt(W*32) = block_n because W*32 threads work on one tile in GEMM
+template <uint32_t m, uint32_t W, uint32_t chol_T_TS, uint32_t GEMM_T_TS, uint32_t trsm_T_TS, uint32_t smem_size_bytes, uint32_t block_smem_size_bytes, uint32_t trsm_smem_size_bytes>
 void triblock(const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace) {
     const int32_t num_blocks = (int32_t)(N / block_n);
 
@@ -286,20 +329,19 @@ void triblock(const uint32_t N, const uint32_t block_n, float const *in, float *
         // computes A_ii - XX^T
         
         const float *A_ii = triblock_helper::get_block(in, i, i, N, block_n);
-        gemm::triblock_diagonal_gemm<block_T_TS, m><<<num_GPU_blocks_GEMM, num_threads_GEMM, block_smem_size_bytes*2>>>(const_cast<float*>(A_ii), X, N, block_n, block_smem_size_bytes*2);
+        gemm::triblock_diagonal_gemm<GEMM_T_TS, m><<<num_GPU_blocks_GEMM, num_threads_GEMM, block_smem_size_bytes*2>>>(const_cast<float*>(A_ii), X, N, block_n, block_smem_size_bytes*2);
 
         // solve block Cholesky again and update out
         triblock_helper::triblock_block_cholesky<m, W, chol_T_TS, chol_T_TS, smem_size_bytes>(N, block_n, in, out, i);
 
     }
-
 }
 
 template <uint32_t m, uint32_t W, uint32_t chol_T_TS, uint32_t block_T_TS, uint32_t trsm_T_TS>
 void launch_special_kernel(const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace) {
 
     constexpr int smem_size_bytes = m * m * sizeof(float);
-    constexpr int block_smem_size_bytes = block_T_TS * m * block_T_TS * m * sizeof(float);
+    constexpr int GEMM_smem_size_bytes = block_T_TS * m * block_T_TS * m * sizeof(float);
     constexpr int trsm_smem_size_bytes = trsm_T_TS * m * trsm_T_TS * m * sizeof(float);
 
     cudaFuncSetAttribute(
@@ -316,7 +358,7 @@ void launch_special_kernel(const uint32_t N, const uint32_t block_n, float const
     cudaFuncSetAttribute(
         gemm::triblock_diagonal_gemm<block_T_TS, m>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
-        block_smem_size_bytes * 2 // need to store 2 blocks in smem
+        GEMM_smem_size_bytes * 2 // need to store 2 blocks in smem
     );
 
     cudaFuncSetAttribute(
@@ -325,8 +367,46 @@ void launch_special_kernel(const uint32_t N, const uint32_t block_n, float const
         trsm_smem_size_bytes * 3 // need to store 3 blocks in smem (r*r each)
     );
 
-    triblock<m, W, chol_T_TS, block_T_TS, trsm_T_TS, smem_size_bytes, block_smem_size_bytes, trsm_smem_size_bytes>(N, block_n, in, out, workspace);
+    triblock<m, W, chol_T_TS, block_T_TS, trsm_T_TS, smem_size_bytes, GEMM_smem_size_bytes, trsm_smem_size_bytes>(N, block_n, in, out, workspace);
+}
 
+template <uint32_t m, uint32_t W, uint32_t chol_T_TS, uint32_t GEMM_W_TS, uint32_t trsm_T_TS>
+void launch_special_kernel_tensor(const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace) {
+
+    constexpr int smem_size_bytes = m * m * sizeof(float);
+    constexpr int trsm_smem_size_bytes = trsm_T_TS * m * trsm_T_TS * m * sizeof(float);
+
+    constexpr uint32_t warp_H = 16;
+    constexpr uint32_t warp_W = 8;
+    constexpr uint32_t warp_rows = 2;
+    const uint32_t GEMM_block_size = warp_H * GEMM_W_TS * 2;
+    const uint32_t GEMM_smem_size_bytes = GEMM_block_size * GEMM_block_size * sizeof(float);
+
+
+    cudaFuncSetAttribute(
+        alt_kernel_fusion::chol_kernel<m>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        smem_size_bytes
+    );
+    cudaFuncSetAttribute(
+        triblock_helper::block_kernel<m, W, chol_T_TS, chol_T_TS>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        smem_size_bytes * 3 // need to store 3 blocks in smem
+    );
+
+    cudaFuncSetAttribute(
+        gemm::triblock_tensor_gemm<GEMM_W_TS, m>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        GEMM_smem_size_bytes * 2 // need to store 2 blocks in smem
+    );
+
+    cudaFuncSetAttribute(
+        triblock_helper::triblock_block_trsm<trsm_T_TS, m*trsm_T_TS>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        trsm_smem_size_bytes * 3 // need to store 3 blocks in smem (r*r each)
+    );
+
+    triblock_tensor<m, W, chol_T_TS, GEMM_W_TS, trsm_T_TS, smem_size_bytes, GEMM_smem_size_bytes, trsm_smem_size_bytes, GEMM_block_size>(N, block_n, in, out, workspace);
 }
 
 void launch_triblock(const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace) {
@@ -350,6 +430,7 @@ void launch_triblock(const uint32_t N, const uint32_t block_n, float const *in, 
         constexpr uint32_t block_T_TS = 4;
 
         launch_special_kernel<m, W, chol_T_TS, block_T_TS, trsm_T_TS>(N, block_n, in, out, workspace);
+        //launch_special_kernel_tensor<m, W, chol_T_TS, block_T_TS, trsm_T_TS>(N, block_n, in, out, workspace);
     }
 }
 
