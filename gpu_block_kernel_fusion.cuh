@@ -190,7 +190,6 @@ __device__ void gmem_to_smem(float *gmem1, float *gmem2,
 
 ////////////////////////////////////////////////////////////////////////////////
 // Device functions
-
 template <uint32_t A_n, uint32_t r, uint32_t T_TH, uint32_t T_TW>
 __device__ void diagonal_block_gemm_naive(float *A, float* C,
     const uint32_t tile_i, const uint32_t tile_j
