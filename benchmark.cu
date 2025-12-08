@@ -213,11 +213,11 @@ void run_config_cholesky(
 
     printf("  %8.02e", rel_rmse);
 
-    for (int32_t i = 0; i < size; ++i) {
-        for (int32_t j = 0; j < size; ++j) {
-            printf("c_out_host[%d][%d] = %f, c[%d][%d] = %f\n", i, j, c_out_host[i * size + j], i, j, c[i * size + j]);
-        }
-    }
+    // for (int32_t i = 0; i < size; ++i) {
+    //     for (int32_t j = 0; j < size; ++j) {
+    //         printf("c_out_host[%d][%d] = %f, c[%d][%d] = %f\n", i, j, c_out_host[i * size + j], i, j, c[i * size + j]);
+    //     }
+    // }
 
     if (rel_rmse > 1e5) {
         printf("  %9s  %7s", "-", "-");
@@ -1093,7 +1093,7 @@ int main(int argc, char **argv) {
     };
     auto data_triblock = generate_test_data(configs_triblock, Phase::TRIBLOCK_SMALL, Solver::CHOLESKY_TRIBLOCK);
     run_all_impls(Phase::TRIBLOCK_SMALL, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
-    //run_all_impls(Phase::TRIBLOCK, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
+    run_all_impls(Phase::TRIBLOCK, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
     //run_all_impls(Phase::CUSOLVER_POTRF, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
     //run_all_impls(Phase::ENHANCED_DELUXE_CHOLESKY, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
 
