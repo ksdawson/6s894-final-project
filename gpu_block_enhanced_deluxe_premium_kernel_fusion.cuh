@@ -46,8 +46,7 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
         // TRSM
         float *Lij = smem2;
         float *Aij = smem;
-        // trsm_small::block_trsm_reuse<W, m, m, m, m>(Ljj, Lij, Aij);
-        trsm_small::block_trsm<m, m, m, m>(Ljj, Lij, Aij);
+        trsm_small::block_trsm_reuse<W, m, m, m, m>(Ljj, Lij, Aij);
 
         // Write back Lij
         Lij = block_cholesky_space::get_block(L, i, j, n, m);
@@ -79,22 +78,44 @@ __global__ void block_kernel(float *A, float *L, // input matrix, Chol matrix
 // Host functions
 
 template <uint32_t m, uint32_t T_TS, uint32_t W>
+void launch_specialized_kernel(const uint32_t n, float const *in, float *out, const uint32_t start_j) {
+    // Setup chol kernel smem
+    constexpr int smem_size_bytes = m * m * sizeof(float);
+    cudaFuncSetAttribute(
+        block_cholesky_space::chol_kernel<m, W, T_TS, T_TS>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        smem_size_bytes * 2
+    );
+
+    // Setup block kernel smem
+    cudaFuncSetAttribute(
+        deluxe_alt_kernel_fusion::block_kernel<m, W, T_TS, T_TS>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        smem_size_bytes * 3 // need to store 3 blocks in smem
+    );
+
+    // Chol first diagonal block
+    // alt_kernel_fusion::chol_kernel<m><<<1, 32*32, smem_size_bytes>>>(in, out, n, start_j);
+    block_cholesky_space::chol_kernel<m, W, T_TS, T_TS><<<1, W*32, smem_size_bytes * 2>>>(in, out, n, start_j);
+
+    // Iterate over block cols launching a kernel for each step
+    for (uint32_t j = start_j; j < n / m - 1; ++j) {
+        // Trsm then update w/ first off diagonal computing next Chol diagonal block
+        deluxe_alt_kernel_fusion::block_kernel<m, W, T_TS, T_TS><<<48, W*32, smem_size_bytes*3>>>(const_cast<float*>(in), out, n, j);
+    }
+}
+
+template <uint32_t m, uint32_t T_TS, uint32_t W>
 void launch_specialized_kernel_dynamic_block(const uint32_t n, float const *in, float *out,
     const uint32_t start_j, const uint32_t end_j
 ) {
     // Setup chol kernel smem
     constexpr int smem_size_bytes = m * m * sizeof(float);
     cudaFuncSetAttribute(
-        alt_kernel_fusion::chol_kernel<m>,
+        block_cholesky_space::chol_kernel<m, W, T_TS, T_TS>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
-        smem_size_bytes
+        smem_size_bytes * 2
     );
-
-    // Handle matrix smaller than block
-    if (n < m) {
-        alt_kernel_fusion::chol_kernel<<<1, 32*32, smem_size_bytes>>>(in, out, n, n, 0);
-        return;
-    }
 
     // Setup block kernel smem
     cudaFuncSetAttribute(
@@ -104,7 +125,8 @@ void launch_specialized_kernel_dynamic_block(const uint32_t n, float const *in, 
     );
 
     // Chol first diagonal block
-    alt_kernel_fusion::chol_kernel<m><<<1, 32*32, smem_size_bytes>>>(in, out, n, 0);
+    // alt_kernel_fusion::chol_kernel<m><<<1, 32*32, smem_size_bytes>>>(in, out, n, start_j);
+    block_cholesky_space::chol_kernel<m, W, T_TS, T_TS><<<1, W*32, smem_size_bytes * 2>>>(in, out, n, start_j);
 
     // Iterate over block cols launching a kernel for each step
     for (uint32_t j = start_j; j < end_j; ++j) {
@@ -116,25 +138,16 @@ void launch_specialized_kernel_dynamic_block(const uint32_t n, float const *in, 
 void launch_block_cholesky(
     const uint32_t n, float const *in, float *out, void *workspace
 ) {
-    // Divide the grid into blocks
-    // if (n < 2048) {
-    //     deluxe_alt_kernel_fusion::launch_specialized_kernel<16, 1, 8>(n, in, out);
-    // } else if (n < 4096) {
-    //     deluxe_alt_kernel_fusion::launch_specialized_kernel<32, 2, 8>(n, in, out);
-    // } else {
-    //     deluxe_alt_kernel_fusion::launch_specialized_kernel<64, 4, 8>(n, in, out);
-    // }
-
     // Make sure # blocks never falls below 1/2 # SMs (w/ block size btwn 16 and 64)
     if (n > 1536 + 64) {
         launch_specialized_kernel_dynamic_block<64, 2, 32>(n, in, out, 0, (n-1536)/64);
         launch_specialized_kernel_dynamic_block<32, 2, 8>(n, in, out, (n-1536)/32, (n-768)/32);
-        launch_specialized_kernel_dynamic_block<16, 1, 8>(n, in, out, (n-768)/16, n/16 - 1);
+        launch_specialized_kernel<16, 1, 8>(n, in, out, (n-768)/16);
     } else if (n > 768 + 32) {
         launch_specialized_kernel_dynamic_block<32, 2, 8>(n, in, out, 0, (n-768)/32);
-        launch_specialized_kernel_dynamic_block<16, 1, 8>(n, in, out, (n-768)/16, n/16 - 1);
+        launch_specialized_kernel<16, 1, 8>(n, in, out, (n-768)/16);
     } else {
-        launch_specialized_kernel_dynamic_block<16, 1, 8>(n, in, out, 0, n/16 - 1);
+        launch_specialized_kernel<16, 1, 8>(n, in, out, 0);
     }
 }
 

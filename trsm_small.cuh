@@ -167,6 +167,7 @@ __device__ void block_trsm_reuse(float *A, float *X, float *B) {
   // Use local thread idx as this is done at the warp level
   const uint32_t thread_idx = threadIdx.x % 32;
   constexpr uint32_t rows_per_warp = r / W;
+  const uint32_t block_idx = threadIdx.x / 32 * rows_per_warp;
   #pragma unroll
   for (uint32_t i = 0; i < r; ++i) {
     // Each thread computes a piece of each sum
@@ -175,7 +176,7 @@ __device__ void block_trsm_reuse(float *A, float *X, float *B) {
       const float a = A[i * A_n + j];
       #pragma unroll
       for (uint32_t idx = 0; idx < rows_per_warp; ++idx) {
-        float *x = X + (idx * W) * X_n;
+        float *x = X + (block_idx + idx) * X_n;
         partial_sum[idx] += a * x[j];
       }
     }
@@ -185,14 +186,16 @@ __device__ void block_trsm_reuse(float *A, float *X, float *B) {
       const float sum = utils::warp_prefix_sum<float>(partial_sum[idx]);
       // Last thread handles writing it back
       if (thread_idx == 31) {
-        float *x = X + (idx * W) * X_n;
-        const float *b = B + (idx * W) * B_n;
+        const uint32_t offset = block_idx + idx;
+        float *x = X + offset * X_n;
+        const float *b = B + offset * B_n;
         x[i] = (b[i] - sum) / A[i * A_n + i];
       }
     }
     // All threads need this iteration to be done
     __syncwarp();
   }
+  __syncthreads();
 }
 template <uint32_t W, uint32_t B_n, uint32_t r>
 __device__ void block_trsm_reuse(float *A, float *X, float *B,
@@ -201,6 +204,7 @@ __device__ void block_trsm_reuse(float *A, float *X, float *B,
   // Use local thread idx as this is done at the warp level
   const uint32_t thread_idx = threadIdx.x % 32;
   constexpr uint32_t rows_per_warp = r / W;
+  const uint32_t block_idx = threadIdx.x / 32 * rows_per_warp;
   #pragma unroll
   for (uint32_t i = 0; i < r; ++i) {
     // Each thread computes a piece of each sum
@@ -209,7 +213,7 @@ __device__ void block_trsm_reuse(float *A, float *X, float *B,
       const float a = A[i * A_n + j];
       #pragma unroll
       for (uint32_t idx = 0; idx < rows_per_warp; ++idx) {
-        float *x = X + (idx * W) * X_n;
+        float *x = X + (block_idx + idx) * X_n;
         partial_sum[idx] += a * x[j];
       }
     }
@@ -219,14 +223,16 @@ __device__ void block_trsm_reuse(float *A, float *X, float *B,
       const float sum = utils::warp_prefix_sum<float>(partial_sum[idx]);
       // Last thread handles writing it back
       if (thread_idx == 31) {
-        float *x = X + (idx * W) * X_n;
-        const float *b = B + (idx * W) * B_n;
+        const uint32_t offset = block_idx + idx;
+        float *x = X + offset * X_n;
+        const float *b = B + offset * B_n;
         x[i] = (b[i] - sum) / A[i * A_n + i];
       }
     }
     // All threads need this iteration to be done
     __syncwarp();
   }
+  __syncthreads();
 }
 
 __device__ void block_trsm(float *A, float *X, float *B,
