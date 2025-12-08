@@ -85,13 +85,13 @@ namespace triblock_small {
         cholesky_small::block_col_cholesky(smem2, smem1, block_n, block_n, block_n);
         // compute cholesky and store in smem1
         block_cholesky_space::smem_to_gmem(out, smem1, N, block_n);
-        // if (threadIdx.x == 0) {
-        //     for (uint32_t i = 0; i < block_n; ++i) {
-        //         for (uint32_t j = 0; j < block_n; ++j) {
-        //             printf("smem1[%u, %u] = %f\n", i, j, smem1[i * N + j]);
-        //         }
-        //     }
-        // }
+        if (threadIdx.x == 0) {
+            for (uint32_t i = 0; i < block_n; ++i) {
+                for (uint32_t j = 0; j < block_n; ++j) {
+                    printf("smem1[%u, %u] = %f\n", i, j, smem1[i * N + j]);
+                }
+            }
+        }
     
         const float *A;
         float *Lii;
@@ -124,25 +124,33 @@ namespace triblock_small {
     
     // only works for block_n <= 64
     void launch_triblock_small(const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace) {
-        if (block_n == 32) {
-            uint32_t shared_mem_size = 64*64*3 * sizeof(float);
-            CUDA_CHECK(cudaFuncSetAttribute(
-                triblock_2<32, 1, 1>,
-                cudaFuncAttributeMaxDynamicSharedMemorySize,
-                shared_mem_size));
-            triblock_2<32, 1, 1><<<1, 32 * 32, shared_mem_size>>>(N, in, out);
-        } else if (block_n == 64) {
-            uint32_t shared_mem_size = 64*64*3 * sizeof(float);
-            CUDA_CHECK(cudaFuncSetAttribute(
-                triblock_2<64, 2, 2>,
-                cudaFuncAttributeMaxDynamicSharedMemorySize,
-                shared_mem_size));
-            triblock_2<64, 2, 2><<<1, 32 * 32, shared_mem_size>>>(N, in, out);
-        }
-        else {
-            printf("block_n not supported\n");
-        }
-        CUDA_CHECK(cudaDeviceSynchronize());
+        uint32_t shared_mem_size = 50000;
+        CUDA_CHECK(cudaFuncSetAttribute(
+            triblock_2<64, 2, 2>,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            shared_mem_size));
+
+        triblock_2<64, 2, 2><<<1, 32 * 32, shared_mem_size>>>(N, in, out);
+        // if (block_n == 32) {
+        //     uint32_t shared_mem_size = 64*64*3 * sizeof(float);
+        //     CUDA_CHECK(cudaFuncSetAttribute(
+        //         triblock_2<32, 1, 1>,
+        //         cudaFuncAttributeMaxDynamicSharedMemorySize,
+        //         shared_mem_size));
+        //     triblock_2<32, 1, 1><<<1, 32 * 32, shared_mem_size>>>(N, in, out);
+        // } else if (block_n == 64) {
+        //     uint32_t shared_mem_size = 64*64*3 * sizeof(float);
+        //     CUDA_CHECK(cudaFuncSetAttribute(
+        //         triblock_2<64, 2, 2>,
+        //         cudaFuncAttributeMaxDynamicSharedMemorySize,
+        //         shared_mem_size));
+
+        //     triblock_2<64, 2, 2><<<1, 32 * 32, shared_mem_size>>>(N, in, out);
+        // }
+        // else {
+        //     printf("block_n not supported\n");
+        // }
+        // CUDA_CHECK(cudaDeviceSynchronize());
     }
 
 __device__ uint32_t calc_offset(const uint32_t block_n, const uint32_t block_idx) {
@@ -217,21 +225,20 @@ size_t get_workspace_size(int32_t size) {
 // W: number of warps
 // T_TS: number of tiles for GEMM
 // have to ensure that T_TS * sqrt(W*32) = block_n because W*32 threads work on one tile in GEMM
-template <uint32_t m, uint32_t W, uint32_t chol_T_TS, uint32_t block_T_TS, uint32_t smem_size_bytes, uint32_t block_smem_size_bytes>
+template <uint32_t m, uint32_t W, uint32_t chol_T_TS, uint32_t block_T_TS, uint32_t trsm_T_TS, uint32_t smem_size_bytes, uint32_t block_smem_size_bytes, uint32_t trsm_smem_size_bytes>
 void triblock(const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace) {
     const int32_t num_blocks = (int32_t)(N / block_n);
-    TB tb = {in, out, N, block_n, m};
 
     const int32_t tiles_per_dim_GEMM = block_n / m;
     const int32_t num_GPU_blocks_GEMM = tiles_per_dim_GEMM * (tiles_per_dim_GEMM + 1) / 2;
     const int32_t num_threads_GEMM = m * m;
     
-    const int32_t trsm_r = m * block_T_TS;
+    const int32_t trsm_r = m * trsm_T_TS;
     const int32_t num_GPU_blocks_TRSM = block_n / trsm_r;  // One block per row-block of X
     const int32_t num_threads_TRSM = m * m;  // Threads per GPU block
 
     // solve A00 using block cholesky and update out
-    triblock_helper::triblock_block_cholesky<m, W, chol_T_TS, chol_T_TS, smem_size_bytes>(tb, 0);
+    triblock_helper::triblock_block_cholesky<m, W, chol_T_TS, chol_T_TS, smem_size_bytes>(N, block_n, in, out, 0);
 
     // loop through all other row blocks
     for (uint32_t i = 1; i < num_blocks; ++i) {
@@ -241,9 +248,9 @@ void triblock(const uint32_t N, const uint32_t block_n, float const *in, float *
         float const *B = triblock_helper::get_block(in, i, i-1, N, block_n);
 
         // // solve block TRSM and update out
-        trsm_small::triblock_block_trsm_naive<W><<<48, W*32>>>(A, X, B, 
-           N, N, N, block_n);
-        // triblock_helper::triblock_block_trsm<block_T_TS, trsm_r><<<num_GPU_blocks_TRSM, num_threads_TRSM, block_smem_size_bytes*3>>>(A, X, B, N, N, N, block_n);
+        // trsm_small::triblock_block_trsm_naive<W><<<48, W*32>>>(A, X, B, 
+        //    N, N, N, block_n);
+        triblock_helper::triblock_block_trsm<trsm_T_TS, trsm_r><<<num_GPU_blocks_TRSM, num_threads_TRSM, trsm_smem_size_bytes*3>>>(A, X, B, N, N, N, block_n);
 
         // Big GEMM update and update in, unfortunately
         // computes A_ii - XX^T
@@ -252,27 +259,18 @@ void triblock(const uint32_t N, const uint32_t block_n, float const *in, float *
         gemm::triblock_diagonal_gemm<block_T_TS, m><<<num_GPU_blocks_GEMM, num_threads_GEMM, block_smem_size_bytes*2>>>(const_cast<float*>(A_ii), X, N, block_n, block_smem_size_bytes*2);
 
         // solve block Cholesky again and update out
-        triblock_helper::triblock_block_cholesky<m, W, chol_T_TS, chol_T_TS, smem_size_bytes>(tb, i);
+        triblock_helper::triblock_block_cholesky<m, W, chol_T_TS, chol_T_TS, smem_size_bytes>(N, block_n, in, out, i);
 
     }
 
 }
 
-
-void launch_triblock(const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace) {
-    if (block_n <= 32){
-        triblock_small::launch_triblock_small(N, block_n, in, out, workspace);
-        return;
-    } 
-
-    constexpr uint32_t m = 16;
-    constexpr uint32_t W = 8;
-    constexpr uint32_t chol_T_TS = 1;
-
-    constexpr uint32_t block_T_TS = 4;
+template <uint32_t m, uint32_t W, uint32_t chol_T_TS, uint32_t block_T_TS, uint32_t trsm_T_TS>
+void launch_special_kernel(const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace) {
 
     constexpr int smem_size_bytes = m * m * sizeof(float);
     constexpr int block_smem_size_bytes = block_T_TS * m * block_T_TS * m * sizeof(float);
+    constexpr int trsm_smem_size_bytes = trsm_T_TS * m * trsm_T_TS * m * sizeof(float);
 
     cudaFuncSetAttribute(
         alt_kernel_fusion::chol_kernel<m>,
@@ -292,15 +290,39 @@ void launch_triblock(const uint32_t N, const uint32_t block_n, float const *in, 
     );
 
     cudaFuncSetAttribute(
-        triblock_helper::triblock_block_trsm<block_T_TS, m*block_T_TS>,
+        triblock_helper::triblock_block_trsm<trsm_T_TS, m*trsm_T_TS>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
-        block_smem_size_bytes * 3 // need to store 3 blocks in smem (r*r each)
+        trsm_smem_size_bytes * 3 // need to store 3 blocks in smem (r*r each)
     );
 
-    triblock<m, W, chol_T_TS, block_T_TS, smem_size_bytes, block_smem_size_bytes>(N, block_n, in, out, workspace);
+    triblock<m, W, chol_T_TS, block_T_TS, trsm_T_TS, smem_size_bytes, block_smem_size_bytes, trsm_smem_size_bytes>(N, block_n, in, out, workspace);
 
 }
-    
+
+void launch_triblock(const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace) {
+    if (block_n <= 32){
+        triblock_small::launch_triblock_small(N, block_n, in, out, workspace);
+        return;
+    } else if (block_n <=128) {
+        constexpr uint32_t m = 16;
+        constexpr uint32_t W = 8;
+        constexpr uint32_t chol_T_TS = 1;
+        constexpr uint32_t trsm_T_TS = 1;
+        constexpr uint32_t block_T_TS = 1;
+
+        launch_special_kernel<m, W, chol_T_TS, block_T_TS, trsm_T_TS>(N, block_n, in, out, workspace);
+
+    } else {
+        constexpr uint32_t m = 16;
+        constexpr uint32_t W = 8;
+        constexpr uint32_t chol_T_TS = 1;
+        constexpr uint32_t trsm_T_TS = 1;
+        constexpr uint32_t block_T_TS = 4;
+
+        launch_special_kernel<m, W, chol_T_TS, block_T_TS, trsm_T_TS>(N, block_n, in, out, workspace);
+    }
+}
+
 }
 
 

@@ -131,18 +131,16 @@ __global__ void chol_kernel(const float *A, float *L, // input matrix, Chol matr
 }
 
 template <uint32_t m, uint32_t W, uint32_t T_TS, uint32_t T_TW, uint32_t smem_size_bytes>
-void triblock_block_cholesky(TB tb, const uint32_t bi) {
-    const float *in = tb.in;
-    float *out = tb.out;
+void triblock_block_cholesky(const uint32_t N, const uint32_t block_n, float const *in, float *out, const uint32_t bi) {
     
-    const float *A = triblock_helper::get_block(in, bi, bi, tb.N, tb.block_n);
-    float *L = triblock_helper::get_block(out, bi, bi, tb.N, tb.block_n);
+    const float *A = triblock_helper::get_block(in, bi, bi, N, block_n);
+    float *L = triblock_helper::get_block(out, bi, bi, N, block_n);
 
-    alt_kernel_fusion::chol_kernel<m><<<1, 32*32, smem_size_bytes>>>(A, L, tb.N, 0);
+    alt_kernel_fusion::chol_kernel<m><<<1, 32*32, smem_size_bytes>>>(A, L, N, 0);
 
     // iterate over block cols launching a kernel for each step
-    for (uint32_t j = 0; j < tb.block_n / tb.m - 1; ++j) {
-        triblock_helper::block_kernel<m, W, T_TS, T_TS><<<48, W*32, smem_size_bytes*3>>>(const_cast<float*>(A), L, tb.N, tb.block_n, j);
+    for (uint32_t j = 0; j < block_n / m - 1; ++j) {
+        triblock_helper::block_kernel<m, W, T_TS, T_TS><<<48, W*32, smem_size_bytes*3>>>(const_cast<float*>(A), L, N, block_n, j);
     }
 }  
 
@@ -222,6 +220,24 @@ __global__ void triblock_block_trsm (float const *A, float *X, const float *B,
       block_cholesky_space::smem_to_gmem(X_ij, smem2, X_n, r);
     }
   }
+}
+
+void launch_triblock_block_trsm(int32_t size, int32_t r, float const *A, float *X, float *B, void *workspace) {
+
+  constexpr uint32_t m = 16;
+  constexpr uint32_t block_T_TS = 1;
+  constexpr int block_smem_size_bytes = block_T_TS * m * block_T_TS * m * sizeof(float);
+  const int32_t trsm_r = m * block_T_TS;
+  const int32_t num_GPU_blocks_TRSM = size / trsm_r;  // One block per row-block of X
+  constexpr uint32_t num_threads_TRSM = m * m;
+
+  cudaFuncSetAttribute(
+    triblock_helper::triblock_block_trsm<block_T_TS, m*block_T_TS>,
+    cudaFuncAttributeMaxDynamicSharedMemorySize,
+    block_smem_size_bytes * 3 // need to store 3 blocks in smem (r*r each)
+  );
+
+  triblock_block_trsm<block_T_TS, m*block_T_TS><<<num_GPU_blocks_TRSM, num_threads_TRSM, block_smem_size_bytes*3>>>(A, X, B, size, size, size, size);
 }
 
 }

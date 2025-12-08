@@ -50,6 +50,7 @@
 enum class Solver {
     TRSM_VECTOR,
     TRSM_BLOCK,
+    TRSM_BLOCK_T,
     CHOLESKY,
     CHOLESKY_TRIBLOCK
 };
@@ -59,6 +60,7 @@ enum class Phase {
     TRSM,
     CHOLESKY_SMALL,
     TRSM_SMALL,
+    TRSM_BLOCK,
     ENHANCED_CHOLESKY,
     ENHANCED_DELUXE_CHOLESKY,
     ENHANCED_DELUXE_PREMIUM_CHOLESKY,
@@ -123,6 +125,12 @@ TestData generate_test_data(
             data.a[{size, block_size}] = generate_lower_triangular_matrix(size);
             data.c[{size, block_size}] = generate_random_matrix(size);
             data.b[{size, block_size}] = trsm_generate(data.a[{size, block_size}], data.c[{size, block_size}], size);
+        } else if (solver == Solver::TRSM_BLOCK_T) {
+            auto size = config.size;
+            auto block_size = config.block_size;
+            data.a[{size, block_size}] = generate_lower_triangular_matrix(size);
+            data.c[{size, block_size}] = generate_random_matrix(size);
+            data.b[{size, block_size}] = trsm_generate_T(data.a[{size, block_size}], data.c[{size, block_size}], size);
         } else if (solver == Solver::TRSM_VECTOR) {
             auto size = config.size;
             auto block_size = config.block_size;
@@ -198,7 +206,120 @@ void run_config_cholesky(
     } else if (solver == Solver::CHOLESKY_TRIBLOCK) {
         tflops = tflops_triblock(size, block_size);
         rel_rmse = calc_error_cholesky(c_out_host, c, size);
+    } else {
+        tflops = tflops_cholesky(size);
+        rel_rmse = calc_error_cholesky(c_out_host, c, size);
+    } 
+
+    printf("  %8.02e", rel_rmse);
+
+    for (int32_t i = 0; i < size; ++i) {
+        for (int32_t j = 0; j < size; ++j) {
+            printf("c_out_host[%d][%d] = %f, c[%d][%d] = %f\n", i, j, c_out_host[i * size + j], i, j, c[i * size + j]);
+        }
     }
+
+    if (rel_rmse > 1e5) {
+        printf("  %9s  %7s", "-", "-");
+    } else {
+        // SHOULD CHANGE THIS TARGET TIME
+        double target_time_ms = 40.0;
+        double elapsed_ms = 0.0;
+        
+        elapsed_ms = benchmark_ms(
+            target_time_ms,
+            1,
+            [&]() {
+                if (workspace_size > 0) {
+                    CUDA_CHECK(cudaMemset(workspace_gpu, 0, workspace_size));
+                }
+                CUDA_CHECK(cudaMemset(flush_gpu, 1, 1024*1024*64));
+            },
+            [&]() {
+                Impl::run(size, block_size, a_gpu, c_gpu, b_gpu, workspace_gpu);
+            });
+
+        results.elapsed_ms[{size, block_size}] = elapsed_ms;
+        //double tflop = 2.0 * size_i * size_k * size_j * 1e-12;
+        printf("  %9.05f  %7.02f", elapsed_ms, tflops / (elapsed_ms * 1e-3));
+    }
+
+    printf("\n");
+
+    CUDA_CHECK(cudaFree(a_gpu));
+    CUDA_CHECK(cudaFree(b_gpu));
+    CUDA_CHECK(cudaFree(c_gpu));
+    CUDA_CHECK(cudaFree(flush_gpu));
+    if (workspace_size > 0) {
+        CUDA_CHECK(cudaFree(workspace_gpu));
+    }
+}
+
+template <typename Impl>
+void run_config_graph(
+    Phase phase,
+    Solver solver,
+    TestData const &data,
+    BenchmarkConfig const &config,
+    BenchmarkResults &results) {
+    auto size = config.size;
+    auto block_size = config.block_size;
+
+    auto const &a = data.a.at({size, block_size});
+    auto const &c = data.c.at({size, block_size});
+
+    float *a_gpu;
+    float *c_gpu;
+    float *b_gpu;
+    CUDA_CHECK(cudaMalloc(&a_gpu, size * size * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&b_gpu, size * size * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&c_gpu, size * size * sizeof(float)));
+
+    CUDA_CHECK(cudaMemcpy(
+        a_gpu,
+        a.data(),
+        size * size * sizeof(float),
+        cudaMemcpyHostToDevice));
+    
+    CUDA_CHECK(cudaMemset(c_gpu, 0, size * size * sizeof(float)));
+
+    size_t workspace_size = Impl::get_workspace_size(size);
+    void *workspace_gpu = nullptr;
+    if (workspace_size > 0) {
+        CUDA_CHECK(cudaMalloc(&workspace_gpu, workspace_size));
+        CUDA_CHECK(cudaMemset(workspace_gpu, 0, workspace_size));
+    }
+
+    //need to flush gpu caches before benchmarking each run, might have to change size based on GPU
+    void *flush_gpu = nullptr;
+    CUDA_CHECK(cudaMalloc(&flush_gpu, 1024*1024*64));
+    CUDA_CHECK(cudaMemset(flush_gpu, 1, 1024*1024*64));
+
+    printf("  %6d  %6d", size, block_size);
+
+    cudaGraphExec_t instance = nullptr;
+    utils::set_cuda_graph_triblock(triblock::launch_triblock, size, block_size, a_gpu, c_gpu, workspace_gpu, &instance);
+    utils::launch_cuda_graph_triblock(&instance);
+
+    std::vector<float> c_out_host(size * size);
+    CUDA_CHECK(cudaMemcpy(
+        c_out_host.data(),
+        c_gpu,
+        size * size * sizeof(float),
+        cudaMemcpyDeviceToHost));
+    
+    float rel_rmse = 0.0f;
+    double tflops = 0.0;
+    if (solver == Solver::CHOLESKY) {
+        tflops = tflops_cholesky(size);
+        rel_rmse = calc_error_cholesky(c_out_host, c, size);
+    } else if (solver == Solver::CHOLESKY_TRIBLOCK) {
+        tflops = tflops_triblock(size, block_size);
+        rel_rmse = calc_error_cholesky(c_out_host, c, size);
+    } else {
+        tflops = tflops_cholesky(size);
+        rel_rmse = calc_error_cholesky(c_out_host, c, size);
+    } 
 
     printf("  %8.02e", rel_rmse);
 
@@ -225,12 +346,12 @@ void run_config_cholesky(
                 CUDA_CHECK(cudaMemset(flush_gpu, 1, 1024*1024*64));
             },
             [&]() {
-                Impl::run(size, block_size, a_gpu, c_gpu, b_gpu, workspace_gpu);
+                utils::launch_cuda_graph_triblock(&instance);
             });
 
         results.elapsed_ms[{size, block_size}] = elapsed_ms;
         //double tflop = 2.0 * size_i * size_k * size_j * 1e-12;
-        printf("  %9.02f  %7.02f", elapsed_ms, tflops / (elapsed_ms * 1e-3));
+        printf("  %9.05f  %7.02f", elapsed_ms, tflops / (elapsed_ms * 1e-3));
     }
 
     printf("\n");
@@ -242,6 +363,7 @@ void run_config_cholesky(
     if (workspace_size > 0) {
         CUDA_CHECK(cudaFree(workspace_gpu));
     }
+    utils::invalidate_cuda_graph_triblock(&instance);
 }
 
 template <typename Impl>
@@ -302,19 +424,24 @@ void run_config_trsm(
     // need to fix tflops for vector version
     float rel_rmse = 0.0f;
     double tflops = 0.0;
-    if (solver == Solver::TRSM_BLOCK) {
+    if (solver == Solver::TRSM_BLOCK || solver == Solver::TRSM_BLOCK_T) {
         tflops = tflops_trsm(size);
-        if (phase == Phase::TRSM_SMALL) {
-            rel_rmse = calc_error_trsm(c_out_host, c, size);
-        } else if (phase == Phase::TRSM) {
-            rel_rmse = calc_error_trsm_T(c_out_host, c, size);
-        }
+        rel_rmse = calc_error_trsm(c_out_host, c, size);
     } else if (solver == Solver::TRSM_VECTOR) {
         tflops = tflops_trsm(size);
         rel_rmse = calc_error_trsm_vector(c_out_host, c, size);
+    } else {
+        tflops = tflops_trsm(size);
+        rel_rmse = calc_error_trsm(c_out_host, c, size);
     }
     
     printf("  %8.02e", rel_rmse);
+
+    // for (int32_t i = 0; i < size; ++i) {
+    //     for (int32_t j = 0; j < size; ++j) {
+    //         printf("c_out_host[%d][%d] = %f, c[%d][%d] = %f\n", i, j, c_out_host[i * size + j], i, j, c[i * size + j]);
+    //     }
+    // }
 
     if (rel_rmse > 1e5) {
         printf("  %9s  %7s", "-", "-");
@@ -632,9 +759,13 @@ BenchmarkResults run_all_configs(
         for (auto const &config : configs) {
             run_config_cublas(phase, solver, data, config, results);
         }
-    } else if (solver == Solver::TRSM_VECTOR || solver == Solver::TRSM_BLOCK) {
+    } else if (solver == Solver::TRSM_VECTOR || solver == Solver::TRSM_BLOCK || solver == Solver::TRSM_BLOCK_T) {
         for (auto const &config : configs) {
             run_config_trsm<Impl>(phase, solver, data, config, results);
+        }
+    } else if (phase == Phase::TRIBLOCK) {
+        for (auto const &config : configs) {
+            run_config_cholesky<Impl>(phase, solver, data, config, results);
         }
     } else {
         for (auto const &config : configs) {
@@ -663,8 +794,26 @@ struct Cholesky {
     }
 };
 
+struct TrsmBlock {
+    constexpr static char const *name = "trsm_block";
+    
+    static size_t get_workspace_size(int32_t size) {
+        return triblock::get_workspace_size(size);
+    }
+    
+    static void
+    run(int32_t size,
+        int32_t r,
+        float const *a,
+        float *c,
+        float *b,
+        void *workspace) {
+        triblock_helper::launch_triblock_block_trsm(size, r, a, c, b, workspace);
+    }
+};
+
 struct Trsm {
-    constexpr static char const *name = "trsm";
+    constexpr static char const *name = "trsm_cuda_graph";
 
     static size_t get_workspace_size(int32_t size) {
         return trsm_space::get_workspace_size(size);
@@ -786,8 +935,8 @@ struct Triblock {
         float *c,
         float *b,
         void *workspace) {
-        //triblock::launch_triblock(size, block_size, a, c, workspace);
-        utils::launch_cuda_graph_triblock(triblock::launch_triblock, size, block_size, a, c, workspace);
+        triblock::launch_triblock(size, block_size, a, c, workspace);
+        //utils::launch_cuda_graph_triblock(triblock::launch_triblock, size, block_size, a, c, workspace);
     }
 };
 
@@ -839,6 +988,8 @@ std::vector<BenchmarkResults> run_all_impls(
         results.push_back(run_all_configs<Triblock>(phase, solver, data, configs));
     } else if (phase == Phase::ENHANCED_DELUXE_PREMIUM_CHOLESKY) {
         results.push_back(run_all_configs<CholeskyEnhancedDeluxePremium>(phase, solver, data, configs));
+    } else if (phase == Phase::TRSM_BLOCK) {
+        results.push_back(run_all_configs<TrsmBlock>(phase, solver, data, configs));
     }
     return results;
 }
@@ -879,35 +1030,45 @@ std::vector<BenchmarkResults> run_all_impls(
 
 int main(int argc, char **argv) {
 
-    auto configs = std::vector<BenchmarkConfig>{
-        {32, 32},
-        {64, 64},
-        {128, 128},
-        {512, 512},
-        {1024, 1024},
-        {2048, 2048}
-    };
-    auto data_cholesky = generate_test_data(configs, Phase::CHOLESKY, Solver::CHOLESKY);
-    run_all_impls(Phase::CUSOLVER_POTRF, Solver::CHOLESKY, data_cholesky, configs);
-    run_all_impls(Phase::ENHANCED_DELUXE_PREMIUM_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
-    run_all_impls(Phase::ENHANCED_DELUXE_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
-    run_all_impls(Phase::ENHANCED_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
+    // auto configs = std::vector<BenchmarkConfig>{
+    //     {32, 32},
+    //     {64, 64},
+    //     {128, 128},
+    //     {512, 512},
+    //     {1024, 1024},
+    //     {2048, 2048}
+    // };
+    // auto data_cholesky = generate_test_data(configs, Phase::CHOLESKY, Solver::CHOLESKY);
+    // run_all_impls(Phase::CUSOLVER_POTRF, Solver::CHOLESKY, data_cholesky, configs);
+    // run_all_impls(Phase::ENHANCED_DELUXE_PREMIUM_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
+    // run_all_impls(Phase::ENHANCED_DELUXE_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
+    // run_all_impls(Phase::ENHANCED_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
     // run_all_impls(Phase::CHOLESKY, data_cholesky, configs);
     // run_all_impls(Phase::CHOLESKY_SMALL, data_cholesky, configs);
     
 
     // auto configs_trsm = std::vector<BenchmarkConfig> {
     //     {32, 32},
-    //     {64, 32},
-    //     {128, 32},
-    //     {512, 32},
-    //     {1024, 32}
-    // }
+    //     {64, 64},
+    //     {128, 128},
+    //     {512, 512},
+    //     {1024, 1024}
+    // };
 
-    // auto data_trsm = generate_test_data(configs, Phase::TRSM);
-    // run_all_impls(Phase::CUBLAS_TRSM, data_trsm, configs);
-    // run_all_impls(Phase::TRSM_SMALL, data_trsm, configs);
-    // run_all_impls(Phase::TRSM, data_trsm, configs);
+    // auto data_trsm = generate_test_data(configs_trsm, Phase::TRSM, Solver::TRSM_BLOCK);
+    // run_all_impls(Phase::CUBLAS_TRSM, Solver::TRSM_BLOCK, data_trsm, configs_trsm);
+    // run_all_impls(Phase::TRSM_SMALL, Solver::TRSM_BLOCK, data_trsm, configs_trsm);
+
+    // auto configs_trsm_T = std::vector<BenchmarkConfig> {
+    //     {32, 32},
+    //     {64, 64},
+    //     {128, 128},
+    //     {512, 512},
+    //     {1024, 1024}
+    // };
+    // auto data_trsm_T = generate_test_data(configs_trsm_T, Phase::TRSM, Solver::TRSM_BLOCK_T);
+    // run_all_impls(Phase::TRSM, Solver::TRSM_BLOCK_T, data_trsm_T, configs_trsm_T);
+    // run_all_impls(Phase::TRSM_BLOCK, Solver::TRSM_BLOCK_T, data_trsm_T, configs_trsm_T);
 
     // auto configs_trsmvec = std::vector<BenchmarkConfig> {
     //     {32, 1},
@@ -917,24 +1078,24 @@ int main(int argc, char **argv) {
     //     {1024, 1}
 
     // };
-    // auto data_trsm = generate_test_data(configs_trsmvec, Phase::TRSM, Solver::TRSM_VECTOR);
-    // run_all_impls(Phase::CUBLAS_TRSM, Solver::TRSM_VECTOR, data_trsm, configs_trsmvec);
-    // run_all_impls(Phase::TRSM_SMALL, Solver::TRSM_VECTOR, data_trsm, configs_trsmvec);
-    // run_all_impls(Phase::TRSM, Solver::TRSM_VECTOR, data_trsm, configs_trsmvec);
+    // auto data_trsmvec = generate_test_data(configs_trsmvec, Phase::TRSM, Solver::TRSM_VECTOR);
+    // run_all_impls(Phase::CUBLAS_TRSM, Solver::TRSM_VECTOR, data_trsmvec, configs_trsmvec);
+    // run_all_impls(Phase::TRSM_SMALL, Solver::TRSM_VECTOR, data_trsmvec, configs_trsmvec);
+    // run_all_impls(Phase::TRSM, Solver::TRSM_VECTOR, data_trsmvec, configs_trsmvec);
 
     auto configs_triblock = std::vector<BenchmarkConfig>{
         {1024, 32},
-        {1024, 64},
-        {1024, 128},
-        {1024, 256},
-        {1024, 512},
-        {1024, 1024}
+        {64, 64},
+        // {1024, 128},
+        // {1024, 256},
+        // {1024, 512},
+        // {1024, 1024}
     };
     auto data_triblock = generate_test_data(configs_triblock, Phase::TRIBLOCK_SMALL, Solver::CHOLESKY_TRIBLOCK);
-    //run_all_impls(Phase::TRIBLOCK_SMALL, data_triblock, configs_triblock);
-    run_all_impls(Phase::TRIBLOCK, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
-    run_all_impls(Phase::CUSOLVER_POTRF, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
-    //run_all_impls(Phase::ENHANCED_DELUXE_CHOLESKY, Solver::TRIBLOCK, data_triblock, configs_triblock);
+    run_all_impls(Phase::TRIBLOCK_SMALL, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
+    //run_all_impls(Phase::TRIBLOCK, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
+    //run_all_impls(Phase::CUSOLVER_POTRF, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
+    //run_all_impls(Phase::ENHANCED_DELUXE_CHOLESKY, Solver::CHOLESKY_TRIBLOCK, data_triblock, configs_triblock);
 
     //can compute speedups later if needed -- XY
     // for (int32_t j = 1; j < results.size(); ++j) {

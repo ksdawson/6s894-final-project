@@ -79,43 +79,85 @@ void launch_cuda_graph(
     cudaGraphLaunch(instance, 0);
 }
 
-void launch_cuda_graph_triblock(
+// void set_cuda_graph_triblock(void (*kernel_launcher)(const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace),
+// const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace,
+// cudaGraph_t &graph, cudaGraphExec_t &
+// )
+
+void set_cuda_graph_triblock(
   void (*kernel_launcher)(const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace),
-  const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace
+  const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace,
+  cudaGraphExec_t *instance_ptr
 ) {
-    // Invalidate graph if matrix size changes
-    if (instance != nullptr && (N != last_n || block_n != last_block_n)) {
-        cudaGraphExecDestroy(instance);
-        instance = nullptr;
-    }
-
     // If no graph exists, capture one
-    if (instance == nullptr) {
-        cudaGraph_t graph;
-        
-        // Start recording on the default stream
-        cudaStreamBeginCapture(0, cudaStreamCaptureModeGlobal);
+    
+    cudaGraph_t graph;
+    
+    // Start recording on the default stream
+    cudaStreamBeginCapture(0, cudaStreamCaptureModeGlobal);
 
-        // This code records nodes into the graph instead of launching
-        kernel_launcher(N, block_n, in, out, workspace);
+    // This code records nodes into the graph instead of launching
+    kernel_launcher(N, block_n, in, out, workspace);
 
-        // Stop recording
-        cudaStreamEndCapture(0, &graph);
+    // Stop recording
+    cudaStreamEndCapture(0, &graph);
 
-        // Create an executable graph from the recording
-        // (This performs validation and sets up the launch structures)
-        cudaGraphInstantiate(&instance, graph, nullptr, nullptr, 0);
+    // Create an executable graph from the recording
+    // (This performs validation and sets up the launch structures)
+    cudaGraphInstantiate(instance_ptr, graph, nullptr, nullptr, 0);
 
-        // Clean up the template graph (the Exec object owns the data now)
-        cudaGraphDestroy(graph);
-        
-        last_n = N;
-        last_block_n = block_n;
-    }
-
-    // Launch the cached graph
-    // This issues all kernels in a single driver call
-    cudaGraphLaunch(instance, 0);
+    // Clean up the template graph (the Exec object owns the data now)
+    cudaGraphDestroy(graph);
 }
+
+void launch_cuda_graph_triblock(cudaGraphExec_t *instance) {
+  // Launch the cached graph
+    // This issues all kernels in a single driver call
+    cudaGraphLaunch(*instance, 0);
+}
+
+void invalidate_cuda_graph_triblock(cudaGraphExec_t *instance) {
+  cudaGraphExecDestroy(*instance);
+}
+
+
+// void launch_cuda_graph_triblock(
+//   void (*kernel_launcher)(const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace),
+//   const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace
+// ) {
+//     // Invalidate graph if matrix size changes
+//     if (instance != nullptr && (N != last_n || block_n != last_block_n)) {
+//         cudaGraphExecDestroy(instance);
+//         instance = nullptr;
+//     }
+
+//     // If no graph exists, capture one
+//     if (instance == nullptr) {
+//         cudaGraph_t graph;
+        
+//         // Start recording on the default stream
+//         cudaStreamBeginCapture(0, cudaStreamCaptureModeGlobal);
+
+//         // This code records nodes into the graph instead of launching
+//         kernel_launcher(N, block_n, in, out, workspace);
+
+//         // Stop recording
+//         cudaStreamEndCapture(0, &graph);
+
+//         // Create an executable graph from the recording
+//         // (This performs validation and sets up the launch structures)
+//         cudaGraphInstantiate(&instance, graph, nullptr, nullptr, 0);
+
+//         // Clean up the template graph (the Exec object owns the data now)
+//         cudaGraphDestroy(graph);
+        
+//         last_n = N;
+//         last_block_n = block_n;
+//     }
+
+//     // Launch the cached graph
+//     // This issues all kernels in a single driver call
+//     cudaGraphLaunch(instance, 0);
+// }
 
 } // namespace utils

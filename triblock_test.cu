@@ -113,9 +113,9 @@ void test_triblock(uint32_t N, uint32_t block_n) {
 
     // Launch kernel (1 block, multiple warps)
     //triblock_small::launch_cholesky_trsm_combined(N, block_n, A_d, X_d);
-    //triblock::launch_triblock_small(N, block_n, A_d, X_d, nullptr);
+    triblock_small::launch_triblock_small(N, block_n, A_d, X_d, nullptr);
 
-    utils::launch_cuda_graph_triblock(triblock::launch_triblock, N, block_n, A_d, X_d, nullptr);
+    //utils::launch_cuda_graph_triblock(triblock::launch_triblock, N, block_n, A_d, X_d, nullptr);
     // triblock::launch_triblock(N, block_n, A_d, X_d, nullptr);
 
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -133,7 +133,7 @@ void test_triblock(uint32_t N, uint32_t block_n) {
             float diff = X_gpu[i * N + j] - X_true[i * N + j];
             mse += diff * diff;
             if (fabsf(diff) > tol) {
-                printf("Mismatch at (%u, %u): got %.5f, expected %.5f\n", i, j, X_gpu[i * N + j], X_true[i * N + j]);
+                //printf("Mismatch at (%u, %u): got %.5f, expected %.5f\n", i, j, X_gpu[i * N + j], X_true[i * N + j]);
                 failed = true;
             }
             ref_mean_square += X_true[i * N + j] * X_true[i * N + j];
@@ -193,13 +193,15 @@ int main() {
     // test_triblock(128, 64);
     // test_triblock(256, 64);
     // test_triblock(512, 64);
+    //test_triblock(32, 32);
     test_triblock(64, 64);
-    test_triblock(128, 64);
-    test_triblock(1024, 64);
-    test_triblock(1024, 128);
-    test_triblock(1024, 256);
-    test_triblock(1024, 512);
-    test_triblock(1024, 1024);
+    //test_triblock(64, 64);
+    // test_triblock(128, 64);
+    // test_triblock(1024, 64);
+    // test_triblock(1024, 128);
+    // test_triblock(1024, 256);
+    // test_triblock(1024, 512);
+    // test_triblock(1024, 1024);
     
 
     //test_triblock(2048, 32);

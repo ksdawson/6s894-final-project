@@ -81,6 +81,19 @@ std::vector<float> trsm_generate(std::vector<float> const &matrix, std::vector<f
     return result;
 }
 
+std::vector<float> trsm_generate_T(std::vector<float> const &matrix, std::vector<float> const &b, int32_t size) {
+    auto result = std::vector<float>(size * size);
+    for (int32_t i = 0; i < size; ++i) {
+        for (int32_t j = 0; j < size; ++j) {
+            result[j * size + i] = 0.0f;
+            for (int32_t k = 0; k < size; ++k) {
+                result[j * size + i] += matrix[i * size + k] * b[j * size + k];
+            }
+        }
+    }
+    return result;
+}
+
 std::vector<float> trsm_vector_generate(std::vector<float> const &matrix, std::vector<float> const &b, int32_t size) {
     auto result = std::vector<float>(size);
     for (int32_t i = 0; i < size; ++i) {
