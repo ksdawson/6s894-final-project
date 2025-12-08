@@ -65,14 +65,13 @@ namespace triblock_small {
         __syncthreads();
     }
     
-// Works for N >=3, block_n >=2, and block_n <= 64
-// better than cholesky_trsm_combined with microoptimization
+// Works for N >=3, block_n >=2, and block_n <= 32
 // Computes out = in*in^T, block Cholesky decomposition for triblock diagonal
 // N: total dimension of the matrix now!!!!!!!!! different from cholesky_trsm_combined
 // block_n: dimension of each block in triblock diagonal
 // note: currently can only handle block_n <=32, this naive version need to be optimized with better shared memory or register reuse
-template <uint32_t block_n, uint32_t T_TH, uint32_t T_TW>
-__global__ void triblock_2(const uint32_t N, float const *in, float *out) {
+template <uint32_t T_TH, uint32_t T_TW>
+__global__ void triblock_2(const uint32_t N, const uint32_t block_n, float const *in, float *out) {
     extern __shared__ float shared_mem[];
 
     float *smem1 = shared_mem;
@@ -86,7 +85,14 @@ __global__ void triblock_2(const uint32_t N, float const *in, float *out) {
     cholesky_small::block_col_cholesky(smem2, smem1, block_n, block_n, block_n);
     // compute cholesky and store in smem1
     block_cholesky_space::smem_to_gmem(out, smem1, N, block_n);
-    
+    // if (threadIdx.x == 0) {
+    //     for (uint32_t i = 0; i < block_n; ++i) {
+    //         for (uint32_t j = 0; j < block_n; ++j) {
+    //             printf("smem1[%u, %u] = %f\n", i, j, smem1[i * N + j]);
+    //         }
+    //     }
+    // }
+
     const float *A;
     float *Lii;
     float *Lij;
@@ -106,7 +112,7 @@ __global__ void triblock_2(const uint32_t N, float const *in, float *out) {
         // gemm A_(i,i) - L_(i,i-1) * L_(i,i-1)^T
         // compute gemm and store in smem3
         A = block_cholesky_space::get_block(in, i, i, N, block_n);
-        triblock_update<block_n, T_TH, T_TW>(A, smem3, N);
+        triblock_update<T_TH, T_TW>(A, smem3, N, block_n, i);
 
 
         // cholesky L_(i,i), store in smem1
@@ -121,17 +127,17 @@ void launch_triblock_small(const uint32_t N, const uint32_t block_n, float const
     if (block_n == 32) {
         uint32_t shared_mem_size = 64*64*3 * sizeof(float);
         CUDA_CHECK(cudaFuncSetAttribute(
-            triblock_2<32, 1, 1>,
+            triblock_2<1, 1>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             shared_mem_size));
-        triblock_2<32, 1, 1><<<1, 32 * 32, shared_mem_size>>>(N, in, out);
+        triblock_2<1, 1><<<1, 32 * 32, shared_mem_size>>>(N, block_n, in, out);
     } else if (block_n == 64) {
         uint32_t shared_mem_size = 64*64*3 * sizeof(float);
         CUDA_CHECK(cudaFuncSetAttribute(
-            triblock_2<64, 2, 2>,
+            triblock_2<2, 2>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             shared_mem_size));
-        triblock_2<64, 2, 2><<<1, 32 * 32, shared_mem_size>>>(N, in, out);
+        triblock_2<2, 2><<<1, 32 * 32, shared_mem_size>>>(N, block_n, in, out);
     }
     else {
         printf("block_n not supported\n");
