@@ -310,7 +310,7 @@ void set_cuda_graph_trsm(uint32_t n, int32_t r, const float *A, float *x,
 
   buildTriangularSolverGraph<blocksize>(graph, numblocks, n, r, A, x, b);
 
-  CUDA_CHECK(cudaGraphInstantiate(&instance_ptr, graph, NULL, NULL, 0));
+  CUDA_CHECK(cudaGraphInstantiate(instance_ptr, graph, NULL, NULL, 0));
 
   cudaGraphDestroy(graph);
 }
