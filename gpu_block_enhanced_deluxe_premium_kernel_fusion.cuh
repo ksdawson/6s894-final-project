@@ -81,10 +81,15 @@ template <uint32_t m, uint32_t T_TS, uint32_t W>
 void launch_specialized_kernel(const uint32_t n, float const *in, float *out, const uint32_t start_j) {
     // Setup chol kernel smem
     constexpr int smem_size_bytes = m * m * sizeof(float);
+    // cudaFuncSetAttribute(
+    //     block_cholesky_space::chol_kernel<m, W, T_TS, T_TS>,
+    //     cudaFuncAttributeMaxDynamicSharedMemorySize,
+    //     smem_size_bytes * 2
+    // );
     cudaFuncSetAttribute(
-        block_cholesky_space::chol_kernel<m, W, T_TS, T_TS>,
+        alt_kernel_fusion::chol_kernel<m>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
-        smem_size_bytes * 2
+        smem_size_bytes
     );
 
     // Setup block kernel smem
@@ -95,8 +100,8 @@ void launch_specialized_kernel(const uint32_t n, float const *in, float *out, co
     );
 
     // Chol first diagonal block
-    // alt_kernel_fusion::chol_kernel<m><<<1, 32*32, smem_size_bytes>>>(in, out, n, start_j);
-    block_cholesky_space::chol_kernel<m, W, T_TS, T_TS><<<1, W*32, smem_size_bytes * 2>>>(in, out, n, start_j);
+    alt_kernel_fusion::chol_kernel<m><<<1, 32*32, smem_size_bytes>>>(in, out, n, start_j);
+    // block_cholesky_space::chol_kernel<m, W, T_TS, T_TS><<<1, W*32, smem_size_bytes * 2>>>(in, out, n, start_j);
 
     // Iterate over block cols launching a kernel for each step
     for (uint32_t j = start_j; j < n / m - 1; ++j) {
@@ -111,10 +116,15 @@ void launch_specialized_kernel_dynamic_block(const uint32_t n, float const *in, 
 ) {
     // Setup chol kernel smem
     constexpr int smem_size_bytes = m * m * sizeof(float);
+    // cudaFuncSetAttribute(
+    //     block_cholesky_space::chol_kernel<m, W, T_TS, T_TS>,
+    //     cudaFuncAttributeMaxDynamicSharedMemorySize,
+    //     smem_size_bytes * 2
+    // );
     cudaFuncSetAttribute(
-        block_cholesky_space::chol_kernel<m, W, T_TS, T_TS>,
+        alt_kernel_fusion::chol_kernel<m>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
-        smem_size_bytes * 2
+        smem_size_bytes
     );
 
     // Setup block kernel smem
@@ -125,8 +135,8 @@ void launch_specialized_kernel_dynamic_block(const uint32_t n, float const *in, 
     );
 
     // Chol first diagonal block
-    // alt_kernel_fusion::chol_kernel<m><<<1, 32*32, smem_size_bytes>>>(in, out, n, start_j);
-    block_cholesky_space::chol_kernel<m, W, T_TS, T_TS><<<1, W*32, smem_size_bytes * 2>>>(in, out, n, start_j);
+    alt_kernel_fusion::chol_kernel<m><<<1, 32*32, smem_size_bytes>>>(in, out, n, start_j);
+    // block_cholesky_space::chol_kernel<m, W, T_TS, T_TS><<<1, W*32, smem_size_bytes * 2>>>(in, out, n, start_j);
 
     // Iterate over block cols launching a kernel for each step
     for (uint32_t j = start_j; j < end_j; ++j) {

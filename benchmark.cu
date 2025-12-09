@@ -150,7 +150,9 @@ struct Cholesky {
 
   static void run(int32_t size, int32_t block_size, float const *a, float *c,
                   float *b, void *workspace) {
-    block_cholesky_space::launch_block_cholesky(size, a, c, workspace);
+    utils::launch_cuda_graph(block_cholesky_space::launch_block_cholesky,
+        size, a, c, workspace
+    );
   }
 };
 
@@ -215,7 +217,9 @@ struct CholeskyEnhanced {
 
   static void run(int32_t size, int32_t block_size, float const *a, float *c,
                   float *b, void *workspace) {
-    alt_kernel_fusion::launch_block_cholesky(size, a, c, workspace);
+    utils::launch_cuda_graph(alt_kernel_fusion::launch_block_cholesky,
+        size, a, c, workspace
+    );
   }
 };
 
@@ -242,7 +246,9 @@ struct CholeskyEnhancedDeluxe {
 
   static void run(int32_t size, int32_t block_size, float const *a, float *c,
                   float *b, void *workspace) {
-    deluxe_alt_kernel_fusion::launch_block_cholesky(size, a, c, workspace);
+    utils::launch_cuda_graph(deluxe_alt_kernel_fusion::launch_block_cholesky,
+        size, a, c, workspace
+    );
   }
 };
 
@@ -270,7 +276,9 @@ struct CholeskyEnhancedDeluxePremium {
 
   static void run(int32_t size, int32_t block_size, float const *a, float *c,
                   float *b, void *workspace) {
-    prem_deluxe_alt_kernel_fusion::launch_block_cholesky(size, a, c, workspace);
+    utils::launch_cuda_graph(prem_deluxe_alt_kernel_fusion::launch_block_cholesky,
+        size, a, c, workspace
+    );
   }
 };
 
