@@ -1030,16 +1030,16 @@ std::vector<BenchmarkResults> run_all_impls(
 
 int main(int argc, char **argv) {
 
-    // auto configs = std::vector<BenchmarkConfig>{
-    //     {32, 32},
-    //     {64, 64},
-    //     {128, 128},
-    //     {512, 512},
-    //     {1024, 1024},
-    //     {2048, 2048}
-    // };
-    // auto data_cholesky = generate_test_data(configs, Phase::CHOLESKY, Solver::CHOLESKY);
-    // run_all_impls(Phase::CUSOLVER_POTRF, Solver::CHOLESKY, data_cholesky, configs);
+    auto configs = std::vector<BenchmarkConfig>{
+        {32, 32},
+        {64, 64},
+        {128, 128},
+        {512, 512},
+        {1024, 1024},
+        {2048, 2048}
+    };
+    auto data_cholesky = generate_test_data(configs, Phase::CHOLESKY, Solver::CHOLESKY);
+    run_all_impls(Phase::CUSOLVER_POTRF, Solver::CHOLESKY, data_cholesky, configs);
     // run_all_impls(Phase::ENHANCED_DELUXE_PREMIUM_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
     // run_all_impls(Phase::ENHANCED_DELUXE_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
     // run_all_impls(Phase::ENHANCED_CHOLESKY, Solver::CHOLESKY, data_cholesky, configs);
@@ -1057,29 +1057,29 @@ int main(int argc, char **argv) {
 
     auto data_trsm = generate_test_data(configs_trsm, Phase::TRSM, Solver::TRSM_BLOCK);
     run_all_impls(Phase::CUBLAS_TRSM, Solver::TRSM_BLOCK, data_trsm, configs_trsm);
-    run_all_impls(Phase::TRSM_SMALL, Solver::TRSM_BLOCK, data_trsm, configs_trsm);
+    //run_all_impls(Phase::TRSM_SMALL, Solver::TRSM_BLOCK, data_trsm, configs_trsm);
 
-    auto configs_trsm_T = std::vector<BenchmarkConfig> {
-        {32, 32},
-        {64, 64},
-        {128, 128},
-        {512, 512},
-        {1024, 1024}
-    };
-    auto data_trsm_T = generate_test_data(configs_trsm_T, Phase::TRSM, Solver::TRSM_BLOCK_T);
-    run_all_impls(Phase::TRSM, Solver::TRSM_BLOCK_T, data_trsm_T, configs_trsm_T);
-    run_all_impls(Phase::TRSM_BLOCK, Solver::TRSM_BLOCK_T, data_trsm_T, configs_trsm_T);
-
-    // auto configs_trsmvec = std::vector<BenchmarkConfig> {
-    //     {32, 1},
-    //     {64, 1},
-    //     {128, 1},
-    //     {512, 1},
-    //     {1024, 1}
-
+    // auto configs_trsm_T = std::vector<BenchmarkConfig> {
+    //     {32, 32},
+    //     {64, 64},
+    //     {128, 128},
+    //     {512, 512},
+    //     {1024, 1024}
     // };
-    // auto data_trsmvec = generate_test_data(configs_trsmvec, Phase::TRSM, Solver::TRSM_VECTOR);
-    // run_all_impls(Phase::CUBLAS_TRSM, Solver::TRSM_VECTOR, data_trsmvec, configs_trsmvec);
+    // auto data_trsm_T = generate_test_data(configs_trsm_T, Phase::TRSM, Solver::TRSM_BLOCK_T);
+    // run_all_impls(Phase::TRSM, Solver::TRSM_BLOCK_T, data_trsm_T, configs_trsm_T);
+    // run_all_impls(Phase::TRSM_BLOCK, Solver::TRSM_BLOCK_T, data_trsm_T, configs_trsm_T);
+
+    auto configs_trsmvec = std::vector<BenchmarkConfig> {
+        {32, 1},
+        {64, 1},
+        {128, 1},
+        {512, 1},
+        {1024, 1}
+
+    };
+    auto data_trsmvec = generate_test_data(configs_trsmvec, Phase::TRSM, Solver::TRSM_VECTOR);
+    run_all_impls(Phase::CUBLAS_TRSM, Solver::TRSM_VECTOR, data_trsmvec, configs_trsmvec);
     // run_all_impls(Phase::TRSM_SMALL, Solver::TRSM_VECTOR, data_trsmvec, configs_trsmvec);
     // run_all_impls(Phase::TRSM, Solver::TRSM_VECTOR, data_trsmvec, configs_trsmvec);
 

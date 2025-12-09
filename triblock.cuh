@@ -379,8 +379,8 @@ void launch_special_kernel_tensor(const uint32_t N, const uint32_t block_n, floa
     constexpr uint32_t warp_H = 16;
     constexpr uint32_t warp_W = 8;
     constexpr uint32_t warp_rows = 2;
-    const uint32_t GEMM_block_size = warp_H * GEMM_W_TS * 2;
-    const uint32_t GEMM_smem_size_bytes = GEMM_block_size * GEMM_block_size * sizeof(float);
+    constexpr uint32_t GEMM_block_size = warp_H * GEMM_W_TS * 2;
+    constexpr uint32_t GEMM_smem_size_bytes = GEMM_block_size * GEMM_block_size * sizeof(float);
 
 
     cudaFuncSetAttribute(
@@ -427,7 +427,7 @@ void launch_triblock(const uint32_t N, const uint32_t block_n, float const *in, 
         constexpr uint32_t W = 8;
         constexpr uint32_t chol_T_TS = 1;
         constexpr uint32_t trsm_T_TS = 1;
-        constexpr uint32_t block_T_TS = 4;
+        constexpr uint32_t block_T_TS = 1;
 
         launch_special_kernel<m, W, chol_T_TS, block_T_TS, trsm_T_TS>(N, block_n, in, out, workspace);
         //launch_special_kernel_tensor<m, W, chol_T_TS, block_T_TS, trsm_T_TS>(N, block_n, in, out, workspace);

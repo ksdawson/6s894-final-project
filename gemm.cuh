@@ -216,10 +216,11 @@ __device__ void gemm_tensor_copytomem(
     const uint32_t thread_i = thread_ID / 4;
     const uint32_t thread_j = thread_ID % 4;
 
-    mem[thread_i * padding + thread_j * 2] -= reg[0];
-    mem[thread_i * padding + thread_j * 2 + 1] -= reg[1];
-    mem[thread_i * padding + thread_j * 2 + 8*padding] -= reg[2];
-    mem[thread_i * padding + thread_j * 2 + 8*padding + 1] -= reg[3];
+    // change this back to -= after DEBUGGING!!!!!!!!
+    mem[thread_i * padding + thread_j * 2] = reg[0];
+    mem[thread_i * padding + thread_j * 2 + 1] = reg[1];
+    mem[thread_i * padding + thread_j * 2 + 8*padding] = reg[2];
+    mem[thread_i * padding + thread_j * 2 + 8*padding + 1] = reg[3];
 }
 
 template <uint32_t W_TH, uint32_t num_threads_H>
@@ -229,7 +230,7 @@ __device__ void gemm_tensor_warp(float *smem1, float *smem2, uint32_t *reg_A, ui
     constexpr uint32_t warp_W = 8;
     constexpr uint32_t warp_H = 16;
     for (uint32_t k_strides = 0; k_strides < padding; k_strides += 8) {
-        // pointer to the right start for smem1 and smem2
+        // pointer to the right warp for smem1 and smem2
         float *A = smem1 + warp_tile_i * warp_H * W_TH * padding + k_strides;
         float *B = smem2 + warp_tile_j * warp_W * W_TH * padding + k_strides;
         
@@ -259,19 +260,30 @@ __device__ void gemm_tensor_warp(float *smem1, float *smem2, uint32_t *reg_A, ui
                 
             }
         }
-        
     } 
+    
+    // Debug print for one thread in the first warp
+    if (blockIdx.x == 0 && threadIdx.x == 0 && warp_tile_i == 0 && warp_tile_j == 0) {
+         printf("Warp 0: reg_C[0]=%f, reg_C[1]=%f\n", reg_C[0], reg_C[1]);
+    }
 }
 
 // GEMM with tensor core, each block works on 64x64 tiles with 8 warps
 template <uint32_t W_TH, uint32_t num_threads_H>
 __device__ void gemm_tensor(float *X, float *A, float *smem1, float *smem2, float *reg,
     const uint32_t block_tile_i, const uint32_t block_tile_j, const uint32_t N, const uint32_t block_n) {
+    
+    if (threadIdx.x == 0) {
+        printf("gemm_tensor called\n");
+    }
 
     constexpr uint32_t warp_H = 16;
     constexpr uint32_t warp_W = 8;
     constexpr uint32_t warp_rows = 2;
     const uint32_t block_size_H = warp_H * W_TH * warp_rows;
+    if (threadIdx.x == 0) {
+        printf("block_size_H = %u\n", block_size_H);
+    }
     
     const uint32_t warp_ID = threadIdx.x / 32;
     const uint32_t warp_tile_i = warp_ID / 4;
@@ -313,7 +325,45 @@ __device__ void gemm_tensor(float *X, float *A, float *smem1, float *smem2, floa
         }
         __syncthreads();
     }
+}
+
+// requires shared memory of size at least (T_TH * num_threads_H)^2
+template <uint32_t W_TH, uint32_t num_threads_H>
+__global__ void triblock_tensor_gemm(float *Out, float *In, const uint32_t N, const uint32_t block_n, const uint32_t smem_size_bytes) {
+    extern __shared__ float smem[];
+
+    float reg[4 * W_TH + 2*W_TH + 4*W_TH*W_TH] = {0.0f};
+
+    // Map rectangular to triangular tiles
+    const uint32_t block_tile_i = (uint32_t)((sqrtf(8.f * blockIdx.x + 1.f) - 1.f) * 0.5f);
+    const uint32_t block_tile_j = blockIdx.x - (block_tile_i * (block_tile_i + 1) / 2);
+
+    float *smem1 = smem;
+    float *smem2 = smem + smem_size_bytes / (2 * sizeof(float));
+    uint32_t smem_size = smem_size_bytes / sizeof(float);
+    uint32_t reg_size = 4 * W_TH + 2*W_TH + 4*W_TH*W_TH;
+    // if (threadIdx.x == 0) {
+    //     printf("block tile i: %u, block tile j: %u, smem size: %u, W_TH: %u, num_threads_H: %u, reg size: %u\n", block_tile_i, block_tile_j, smem_size, W_TH, num_threads_H, reg_size);
+    // }
+
+    gemm_tensor<W_TH, num_threads_H>(In, Out, smem1, smem2, reg, block_tile_i, block_tile_j, N, block_n);
+}
+
+void launch_gemm_tensor(float *X, float *A, const uint32_t N, const uint32_t smem_size_bytes) {
+    cudaFuncSetAttribute(
+        triblock_tensor_gemm<1, 16>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        50000
+    );
+
+    triblock_tensor_gemm<1, 16><<<1, 256, 32*32*2*4>>>(A, X, N, N, 32*32*2*4);
     
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("Kernel Launch Failed: %s\n", cudaGetErrorString(err));
+    }
+    cudaDeviceSynchronize();
+    printf("launch done done\n");
 }
 
 
@@ -418,23 +468,6 @@ __device__ void triblock_diag_gemm_GPUblock(float *X, float *A,float *smem1, flo
         }
         __syncthreads();
     }
-}
-
-// requires shared memory of size at least (T_TH * num_threads_H)^2
-template <uint32_t W_TH, uint32_t num_threads_H>
-__global__ void triblock_tensor_gemm(float *A, float *X, const uint32_t N, const uint32_t block_n, const uint32_t smem_size_bytes) {
-    extern __shared__ float smem[];
-
-    float reg[4 * W_TH + 2*W_TH + 4*W_TH*W_TH] = {0.0f};
-
-    // Map rectangular to triangular tiles
-    const uint32_t block_tile_i = (uint32_t)((sqrtf(8.f * blockIdx.x + 1.f) - 1.f) * 0.5f);
-    const uint32_t block_tile_j = blockIdx.x - (block_tile_i * (block_tile_i + 1) / 2);
-
-    float *smem1 = smem;
-    float *smem2 = smem + smem_size_bytes / (2 * sizeof(float));
-
-    gemm_tensor<W_TH, num_threads_H>(X, A, smem1, smem2, reg, block_tile_i, block_tile_j, N, block_n);
 }
 
 // requires shared memory of size at least (T_TH * num_threads_H)^2

@@ -47,6 +47,83 @@ void generate_matrix(uint32_t N, uint32_t block_n, float *A, uint32_t A_col_offs
     }
 }
 
+void test_gemm_tensor(uint32_t N) {
+    float *A = (float *)malloc(N*N * sizeof(float));
+    float *A_gpu = (float *)malloc(N*N * sizeof(float));
+    float *X = (float *)malloc(N*N * sizeof(float));
+    float *X_gpu = (float *)malloc(N*N * sizeof(float));
+    float *X_true = (float *)malloc(N*N * sizeof(float));
+
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j <= i; j++) {
+            A[i * N + j] = (float)(rand() % 2 + 1); // positive
+            //A[j * N + i] = A[i * N + j];
+
+            // A[i * N + j] = 0.0f;    
+            // A[j * N + i] = 0.0f;
+            // if (j == i) {
+            //     A[i * N + j] = 1.0f;
+            // }
+        }
+    }
+
+    // for (int i = 0; i < N; i++) {
+    //     A[i * N + i] = 1.0f;
+    // }
+
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            X_true[i * N + j] = 0.0f;
+            for (int k = 0; k < N; k++) {
+                X_true[i * N + j] += A[i * N + k] * A[j * N + k];
+            }
+        }
+    }
+
+    float *A_d, *X_d;
+    CUDA_CHECK(cudaMalloc(&A_d, N * N * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&X_d, N * N * sizeof(float)));
+
+    CUDA_CHECK(cudaMemcpy(A_d, A, N * N * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemset(X_d, 0, N * N * sizeof(float)));
+
+    gemm::launch_gemm_tensor(A_d, X_d, N, 10000);
+
+    CUDA_CHECK(cudaMemcpy(X_gpu, X_d, N * N * sizeof(float), cudaMemcpyDeviceToHost));
+
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            printf("X_true[%d, %d] = %f, X_gpu[%d, %d] = %f\n", i, j, X_true[i * N + j], i, j, X_gpu[i * N + j]);
+        }
+    }
+
+    bool failed = false;
+    float tol = 1e-3f;
+    double mse = 0.0;
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j <= i; j++) {
+            double diff = X_true[i * N + j] - X_gpu[i * N + j];
+            mse += diff * diff;
+            if (std::abs(diff) > tol) {
+                failed = true;
+            }
+        }
+    }
+    mse = std::sqrt(mse / (N * N));
+    if (failed) {
+        printf("GEMM Tensor failed with MSE: %f\n", mse);
+    } else {
+        printf("GEMM Tensor passed with MSE: %f\n", mse);
+    }
+
+    free(A);
+    free(X);
+    free(X_gpu);
+    free(X_true);
+    cudaFree(A_d);
+    cudaFree(X_d);
+}
+
 void test_triblock(uint32_t N, uint32_t block_n) {
     uint32_t num_blocks = (uint32_t)(N / block_n);
     printf("Testing triblock with N=%u and block_n=%u\n", N, block_n);
@@ -132,7 +209,7 @@ void test_triblock(uint32_t N, uint32_t block_n) {
             float diff = X_gpu[i * N + j] - X_true[i * N + j];
             mse += diff * diff;
             if (fabsf(diff) > tol) {
-                //printf("Mismatch at (%u, %u): got %.5f, expected %.5f\n", i, j, X_gpu[i * N + j], X_true[i * N + j]);
+                printf("Mismatch at (%u, %u): got %.5f, expected %.5f\n", i, j, X_gpu[i * N + j], X_true[i * N + j]);
                 failed = true;
             }
             ref_mean_square += X_true[i * N + j] * X_true[i * N + j];
@@ -184,12 +261,15 @@ int main() {
 
     // test_triblock(32, 32);
     // test_triblock(64, 32);
+    // test_triblock(128, 64);
+    // test_triblock(256, 128);
+    // test_triblock(512, 256);
     // test_triblock(128, 32);
     // test_triblock(256, 32);
     // test_triblock(512, 32);
     // test_triblock(1024, 32);
     // test_triblock(64, 64);
-    // test_triblock(128, 64);
+    // test_triblock(256, 128);
     // test_triblock(256, 64);
     // test_triblock(512, 64);
     // test_triblock(64, 64);
@@ -206,11 +286,15 @@ int main() {
 
     // test_triblock(2048, 64);
     // test_triblock(2048, 128);
-    test_triblock(2048, 256);
-    test_triblock(2048, 512);
+    //test_triblock(2048, 512);
     // test_triblock(2048, 1024);
 
     //test_triblock(2048, 32);
+
+    // test_triblock(256, 128);
+    // test_triblock(512, 256);
+
+    test_gemm_tensor(32);
     return 0;
 }
 
