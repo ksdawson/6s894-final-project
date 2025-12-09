@@ -92,7 +92,7 @@ __device__ void block_cholesky(float const *A, float *L,
     }
 }
 
-__device__ void block_col_cholesky(float const *A, float *L,
+__device__ void block_col_cholesky(const float *A, float *L,
     const uint32_t A_n, const uint32_t L_n,
     const uint32_t r
 ) {
@@ -133,7 +133,7 @@ __device__ void block_col_cholesky(float const *A, float *L,
     }
 }
 template <uint32_t A_n, uint32_t L_n, uint32_t r>
-__device__ void block_col_cholesky(float const *A, float *L) {
+__device__ void block_col_cholesky(const float *A, float *L) {
     // Use local thread idx as this is done at the warp level
     const uint32_t thread_idx = threadIdx.x % 32;
 
@@ -171,7 +171,7 @@ __device__ void block_col_cholesky(float const *A, float *L) {
     }
 }
 template <uint32_t L_n, uint32_t r>
-__device__ void block_col_cholesky(float const *A, float *L, const uint32_t A_n) {
+__device__ void block_col_cholesky(const float *A, float *L, const uint32_t A_n) {
     // Use local thread idx as this is done at the warp level
     const uint32_t thread_idx = threadIdx.x % 32;
 
@@ -205,6 +205,168 @@ __device__ void block_col_cholesky(float const *A, float *L, const uint32_t A_n)
         if (threadIdx.x == blockDim.x - 1) {
             L[j * L_n + j] = ljj;
         }
+        __syncthreads();
+    }
+}
+
+__device__ void block_col_cholesky(float *A, float *L,
+    const uint32_t A_n, const uint32_t L_n,
+    const uint32_t r
+) {
+    // Use local thread idx as this is done at the warp level
+    const uint32_t thread_idx = threadIdx.x % 32;
+
+    // Compute first col
+    const float ljj = sqrtf(A[0]);
+    for (uint32_t i = 1 + threadIdx.x / 32; i < r; i += blockDim.x / 32) {
+        const float lij = A[i * A_n] / ljj;
+        if (thread_idx == 31) {
+            L[i * L_n] = lij;
+            if (i == 1) {
+                L[A_n + 1] = sqrtf(A[A_n + 1] - lij * lij);
+            }
+            else {
+                A[i * A_n + i] -= lij * lij;
+            }
+        }
+    }
+    if (threadIdx.x == blockDim.x - 1) {
+        L[0] = ljj;
+    }
+    __syncthreads();
+
+    // Iterate over cols
+    for (uint32_t j = 1; j < r; ++j) {
+        // Get diagonal
+        const float ljj = L[j * A_n + j];
+
+        // Compute off diagonals
+        for (uint32_t i = j + 1 + threadIdx.x / 32; i < r; i += blockDim.x / 32) {
+            float aij = 0.0f;
+            for (uint32_t k = thread_idx; k < j; k += 32) {
+                aij += L[i * L_n + k] * L[j * L_n + k];
+            }
+            aij = A[i * A_n + j] - utils::warp_prefix_sum<float>(aij);
+            const float lij = aij / ljj;
+
+            // Last thread handles writing lij back and updating aii
+            if (thread_idx == 31) {
+                L[i * L_n + j] = lij;
+                if (i == j + 1) {
+                    L[i * A_n + i] = sqrtf(A[i * A_n + i] - lij * lij);
+                }
+                else {
+                    A[i * A_n + i] -= lij * lij;
+                }
+            }
+        }
+
+        __syncthreads();
+    }
+}
+template <uint32_t A_n, uint32_t L_n, uint32_t r>
+__device__ void block_col_cholesky(float *A, float *L) {
+    // Use local thread idx as this is done at the warp level
+    const uint32_t thread_idx = threadIdx.x % 32;
+
+    // Compute first col
+    const float ljj = sqrtf(A[0]);
+    for (uint32_t i = 1 + threadIdx.x / 32; i < r; i += blockDim.x / 32) {
+        const float lij = A[i * A_n] / ljj;
+        if (thread_idx == 31) {
+            L[i * L_n] = lij;
+            if (i == 1) {
+                L[A_n + 1] = sqrtf(A[A_n + 1] - lij * lij);
+            }
+            else {
+                A[i * A_n + i] -= lij * lij;
+            }
+        }
+    }
+    if (threadIdx.x == blockDim.x - 1) {
+        L[0] = ljj;
+    }
+    __syncthreads();
+
+    // Iterate over cols
+    for (uint32_t j = 1; j < r; ++j) {
+        // Get diagonal
+        const float ljj = L[j * A_n + j];
+
+        // Compute off diagonals
+        for (uint32_t i = j + 1 + threadIdx.x / 32; i < r; i += blockDim.x / 32) {
+            float aij = 0.0f;
+            for (uint32_t k = thread_idx; k < j; k += 32) {
+                aij += L[i * L_n + k] * L[j * L_n + k];
+            }
+            aij = A[i * A_n + j] - utils::warp_prefix_sum<float>(aij);
+            const float lij = aij / ljj;
+
+            // Last thread handles writing lij back and updating aii
+            if (thread_idx == 31) {
+                L[i * L_n + j] = lij;
+                if (i == j + 1) {
+                    L[i * A_n + i] = sqrtf(A[i * A_n + i] - lij * lij);
+                }
+                else {
+                    A[i * A_n + i] -= lij * lij;
+                }
+            }
+        }
+
+        __syncthreads();
+    }
+}
+template <uint32_t L_n, uint32_t r>
+__device__ void block_col_cholesky(float *A, float *L, const uint32_t A_n) {
+    // Use local thread idx as this is done at the warp level
+    const uint32_t thread_idx = threadIdx.x % 32;
+
+    // Compute first col
+    const float ljj = sqrtf(A[0]);
+    for (uint32_t i = 1 + threadIdx.x / 32; i < r; i += blockDim.x / 32) {
+        const float lij = A[i * A_n] / ljj;
+        if (thread_idx == 31) {
+            L[i * L_n] = lij;
+            if (i == 1) {
+                L[A_n + 1] = sqrtf(A[A_n + 1] - lij * lij);
+            }
+            else {
+                A[i * A_n + i] -= lij * lij;
+            }
+        }
+    }
+    if (threadIdx.x == blockDim.x - 1) {
+        L[0] = ljj;
+    }
+    __syncthreads();
+
+    // Iterate over cols
+    for (uint32_t j = 1; j < r; ++j) {
+        // Get diagonal
+        const float ljj = L[j * A_n + j];
+
+        // Compute off diagonals
+        for (uint32_t i = j + 1 + threadIdx.x / 32; i < r; i += blockDim.x / 32) {
+            float aij = 0.0f;
+            for (uint32_t k = thread_idx; k < j; k += 32) {
+                aij += L[i * L_n + k] * L[j * L_n + k];
+            }
+            aij = A[i * A_n + j] - utils::warp_prefix_sum<float>(aij);
+            const float lij = aij / ljj;
+
+            // Last thread handles writing lij back and updating aii
+            if (thread_idx == 31) {
+                L[i * L_n + j] = lij;
+                if (i == j + 1) {
+                    L[i * A_n + i] = sqrtf(A[i * A_n + i] - lij * lij);
+                }
+                else {
+                    A[i * A_n + i] -= lij * lij;
+                }
+            }
+        }
+
         __syncthreads();
     }
 }
