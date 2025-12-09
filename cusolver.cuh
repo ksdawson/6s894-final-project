@@ -1,5 +1,5 @@
 // TL+ {"compile_flags": ["-lcuda", "-lcublas", "-lcusolver"]}
-// TL+ {"header_files": ["cusolver_utils.cuh"]}
+// TL+ {"header_files": ["utils.cuh", "cusolver_utils.cuh"]}
 // TL {"workspace_files": []}
 
 #pragma once
@@ -10,6 +10,7 @@
 #include <vector>
 #include <cuda_runtime.h>
 #include <cusolverDn.h>
+#include "utils.cuh"
 
 #include "cusolver_utils.cuh"
 

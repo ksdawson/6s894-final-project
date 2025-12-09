@@ -1,3 +1,61 @@
+// TL+ {"compile_flags": ["-lcuda", "-lcublas", "-lcusolver"]}
+// TL+ {"header_files": []}
+// TL+ {"workspace_files": []}
+
+#pragma once  
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cuda_runtime.h>
+#include <fstream>
+#include <iostream>
+#include <map>
+#include <random>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+enum class Solver {
+    TRSM_VECTOR,
+    TRSM_BLOCK,
+    TRSM_BLOCK_T,
+    CHOLESKY,
+    CHOLESKY_TRIBLOCK
+};
+
+enum class Phase {
+    CHOLESKY,
+    TRSM,
+    CHOLESKY_SMALL,
+    TRSM_SMALL,
+    TRSM_BLOCK,
+    ENHANCED_CHOLESKY,
+    ENHANCED_DELUXE_CHOLESKY,
+    ENHANCED_DELUXE_PREMIUM_CHOLESKY,
+    CUSOLVER_POTRF,
+    CUBLAS_TRSM,
+    TRIBLOCK_SMALL,
+    TRIBLOCK,
+    TRIBLOCK_TENSOR,
+    TRIBLOCK_TENSOR_GRAPH
+};
+
+struct BenchmarkResults {
+    char const *name;
+    std::map<std::tuple<int32_t, int32_t>, double> elapsed_ms;
+};
+
+struct BenchmarkConfig {
+    int32_t size;
+    int32_t block_size;
+};
+
+struct TestData {
+    std::map<std::tuple<int32_t, int32_t>, std::vector<float>> a;
+    std::map<std::tuple<int32_t, int32_t>, std::vector<float>> b;
+    std::map<std::tuple<int32_t, int32_t>, std::vector<float>> c;
+};
+
 std::vector<float> generate_random_matrix(int32_t size) {
     std::vector<float> matrix(size * size);
     for (int32_t i = 0; i < size; ++i) {
@@ -172,25 +230,34 @@ float calc_error_trsm_vector(std::vector<float> const &c_out_host, std::vector<f
 }
 
 double tflops_cholesky(int32_t size) {
-    int32_t num_sqrts = size;
-    int32_t num_fma = size * (size-1) * (size+1) / 3;
-    int32_t num_divs = size * (size-1) / 2;
+    double num_sqrts = (double)size;
+    double num_fma = (double)size * (size-1) * (size+1) / 3.0;
+    double num_divs = (double)size * (size-1) / 2.0;
 
-    int32_t num_ops = num_sqrts + num_fma + num_divs;
+    double num_ops = num_sqrts + num_fma + num_divs;
+    
     double tflops = num_ops * 1e-12;
     return tflops;
 }
 
 double tflops_trsm(int32_t size) {
-    int32_t num_divs = size * size;
-    int32_t num_fma = size * size * (size-1);
-    int32_t num_ops = num_divs + num_fma;
+    double num_divs = (double)size * size;
+    double num_fma = (double)size * size * (size-1);
+    double num_ops = num_divs + num_fma;
+    double tflops = num_ops * 1e-12;
+    return tflops;
+}
+
+double tflops_trsm_vec(int32_t size) {
+    double num_divs = (double)size;
+    double num_fma = (double)size * (size-1);
+    double num_ops = num_divs + num_fma;
     double tflops = num_ops * 1e-12;
     return tflops;
 }
 
 double tflops_gemm(int32_t size) {
-    int32_t num_fma = size * size * size * 2;
+    double num_fma = (double)size * size * size * 2.0; 
     double tflops = num_fma * 1e-12;
     return tflops;
 }
@@ -199,7 +266,8 @@ double tflops_triblock(int32_t size, int32_t block_size) {
     int32_t num_blocks = (int32_t)(size / block_size);
     double tf_chol = tflops_cholesky(block_size) * num_blocks;
     double tf_trsm = tflops_trsm(block_size) * (num_blocks - 1);
-    double tf_GEMMs = tflops_gemm(block_size) * (num_blocks - 1);
+    double tf_GEMMs = tflops_gemm(block_size) * (num_blocks - 1); // This logic might be approximation for blocked cholesky
     double tflops = tf_chol + tf_trsm + tf_GEMMs;
     return tflops;
 }
+

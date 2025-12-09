@@ -198,8 +198,8 @@ __device__ void gemm_tensor_copytoreg(
     const uint32_t thread_Ai = thread_ID / 4;
     const uint32_t thread_Aj = thread_ID % 4;
     reg_A[0] = __float_as_uint(smem1[thread_Ai * padding + thread_Aj]);
-    reg_A[1] = __float_as_uint(smem1[thread_Ai * padding + thread_Aj + 4]);
-    reg_A[2] = __float_as_uint(smem1[thread_Ai * padding + thread_Aj + 8*padding]);
+    reg_A[1] = __float_as_uint(smem1[thread_Ai * padding + thread_Aj + 8*padding]);
+    reg_A[2] = __float_as_uint(smem1[thread_Ai * padding + thread_Aj + 4]);
     reg_A[3] = __float_as_uint(smem1[thread_Ai * padding + thread_Aj + 8*padding + 4]);
 
     const uint32_t thread_Bi = thread_ID / 4;
@@ -217,10 +217,26 @@ __device__ void gemm_tensor_copytomem(
     const uint32_t thread_j = thread_ID % 4;
 
     // change this back to -= after DEBUGGING!!!!!!!!
-    mem[thread_i * padding + thread_j * 2] = reg[0];
-    mem[thread_i * padding + thread_j * 2 + 1] = reg[1];
-    mem[thread_i * padding + thread_j * 2 + 8*padding] = reg[2];
-    mem[thread_i * padding + thread_j * 2 + 8*padding + 1] = reg[3];
+    mem[thread_i * padding + thread_j * 2] -= reg[0];
+    mem[thread_i * padding + thread_j * 2 + 1] -= reg[1];
+    mem[thread_i * padding + thread_j * 2 + 8*padding] -= reg[2];
+    mem[thread_i * padding + thread_j * 2 + 8*padding + 1] -= reg[3];
+}
+
+__device__ void gemm_tensor_copytomem(
+    float *memto, const float*memsub, float *reg, 
+    const uint32_t paddingto, const uint32_t paddingsub) {
+    
+    const uint32_t thread_ID = threadIdx.x % 32;
+    
+    const uint32_t thread_i = thread_ID / 4;
+    const uint32_t thread_j = thread_ID % 4;
+
+    // change this back to -= after DEBUGGING!!!!!!!!
+    memto[thread_i * paddingto + thread_j * 2] = memsub[thread_i * paddingsub + thread_j * 2] - reg[0];
+    memto[thread_i * paddingto + thread_j * 2 + 1] = memsub[thread_i * paddingsub + thread_j * 2 + 1] - reg[1];
+    memto[thread_i * paddingto + thread_j * 2 + 8*paddingto] = memsub[thread_i * paddingsub + thread_j * 2 + 8*paddingsub] - reg[2];
+    memto[thread_i * paddingto + thread_j * 2 + 8*paddingto + 1] = memsub[thread_i * paddingsub + thread_j * 2 + 8*paddingsub + 1] - reg[3];
 }
 
 template <uint32_t W_TH, uint32_t num_threads_H>
@@ -229,11 +245,26 @@ __device__ void gemm_tensor_warp(float *smem1, float *smem2, uint32_t *reg_A, ui
     
     constexpr uint32_t warp_W = 8;
     constexpr uint32_t warp_H = 16;
+    // if (threadIdx.x == 0) {
+    //     printf("padding = %u\n", padding);
+    // }
     for (uint32_t k_strides = 0; k_strides < padding; k_strides += 8) {
         // pointer to the right warp for smem1 and smem2
         float *A = smem1 + warp_tile_i * warp_H * W_TH * padding + k_strides;
         float *B = smem2 + warp_tile_j * warp_W * W_TH * padding + k_strides;
-        
+        // if (threadIdx.x == 0 && k_strides == 0) {
+        //     for (uint32_t i = 0; i < padding; ++i) {
+        //         for (uint32_t j = 0; j < padding; ++j) {
+        //             if (i == j && (A[i*padding + j] != 1.0f || B[i*padding + j] != 1.0f)) {
+        //                 printf("gemm_tensor: A[%u, %u] = %f, B[%u, %u] = %f\n", i, j, A[i * padding + j], i, j, B[i * padding + j]);
+        //             }
+
+        //             if (i != j && (A[i*padding + j] != 0.0f || B[i*padding + j] != 0.0f)) {
+        //                 printf("gemm_tensor: A[%u, %u] = %f, B[%u, %u] = %f\n", i, j, A[i * padding + j], i, j, B[i * padding + j]);
+        //             }
+        //         }
+        //     }
+        // }
         // copy smem to registers
         for (uint32_t i = 0; i < W_TH; ++i) {
             float *A_i = A + i * warp_H * padding;
@@ -241,7 +272,7 @@ __device__ void gemm_tensor_warp(float *smem1, float *smem2, uint32_t *reg_A, ui
             gemm_tensor_copytoreg(A_i, B_i, 
                 reg_A + i * 4, reg_B + i * 2, padding);
         }
-
+        
         // perform tensor core operation
         for (uint32_t wi = 0; wi < W_TH; ++wi) {
             for (uint32_t wj = 0; wj < W_TH; ++wj) {
@@ -260,12 +291,12 @@ __device__ void gemm_tensor_warp(float *smem1, float *smem2, uint32_t *reg_A, ui
                 
             }
         }
+        // if (k_strides == 0) {
+        //     printf("threadIdx.x = %u, reg_A[0] = %f\n", threadIdx.x, reg_A[0]);
+        //     printf("threadIdx.x = %u, reg_B[0] = %f\n", threadIdx.x, reg_B[0]);
+        //     printf("threadIdx.x = %u, reg_C[0] = %f\n", threadIdx.x, reg_C[0]);
+        // }
     } 
-    
-    // Debug print for one thread in the first warp
-    if (blockIdx.x == 0 && threadIdx.x == 0 && warp_tile_i == 0 && warp_tile_j == 0) {
-         printf("Warp 0: reg_C[0]=%f, reg_C[1]=%f\n", reg_C[0], reg_C[1]);
-    }
 }
 
 // GEMM with tensor core, each block works on 64x64 tiles with 8 warps
@@ -273,17 +304,17 @@ template <uint32_t W_TH, uint32_t num_threads_H>
 __device__ void gemm_tensor(float *X, float *A, float *smem1, float *smem2, float *reg,
     const uint32_t block_tile_i, const uint32_t block_tile_j, const uint32_t N, const uint32_t block_n) {
     
-    if (threadIdx.x == 0) {
-        printf("gemm_tensor called\n");
-    }
+    // if (threadIdx.x == 0) {
+    //     printf("gemm_tensor called\n");
+    // }
 
     constexpr uint32_t warp_H = 16;
     constexpr uint32_t warp_W = 8;
     constexpr uint32_t warp_rows = 2;
     const uint32_t block_size_H = warp_H * W_TH * warp_rows;
-    if (threadIdx.x == 0) {
-        printf("block_size_H = %u\n", block_size_H);
-    }
+    // if (threadIdx.x == 0) {
+    //     printf("block_size_H = %u\n", block_size_H);
+    // }
     
     const uint32_t warp_ID = threadIdx.x / 32;
     const uint32_t warp_tile_i = warp_ID / 4;
@@ -310,6 +341,7 @@ __device__ void gemm_tensor(float *X, float *A, float *smem1, float *smem2, floa
 
             // solve matrix using tensor core
             gemm_tensor_warp<W_TH, num_threads_H>(smem1, smem2, reg_Xi, reg_Xj, reg_Aij, warp_tile_i, warp_tile_j, block_size_H);
+            
             __syncthreads();
         }
 
@@ -356,7 +388,7 @@ void launch_gemm_tensor(float *X, float *A, const uint32_t N, const uint32_t sme
         50000
     );
 
-    triblock_tensor_gemm<1, 16><<<1, 256, 32*32*2*4>>>(A, X, N, N, 32*32*2*4);
+    triblock_tensor_gemm<1, 16><<<36, 256, 32*32*2*4>>>(A, X, N, N, 32*32*2*4);
     
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {

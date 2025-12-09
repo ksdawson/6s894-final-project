@@ -14,8 +14,35 @@ namespace utils {
       exit(EXIT_FAILURE); \
   }
 
+// cusolver API error checking
+#define CUSOLVER_CHECK(err)                                                                        \
+    do {                                                                                           \
+        cusolverStatus_t err_ = (err);                                                             \
+        if (err_ != CUSOLVER_STATUS_SUCCESS) {                                                     \
+            printf("cusolver error %d at %s:%d\n", err_, __FILE__, __LINE__);                      \
+            throw std::runtime_error("cusolver error");                                            \
+        }                                                                                          \
+    } while (0)
 
+// cublas API error checking
+#define CUBLAS_CHECK(err)                                                                          \
+    do {                                                                                           \
+        cublasStatus_t err_ = (err);                                                               \
+        if (err_ != CUBLAS_STATUS_SUCCESS) {                                                       \
+            printf("cublas error %d at %s:%d\n", err_, __FILE__, __LINE__);                        \
+            throw std::runtime_error("cublas error");                                              \
+        }                                                                                          \
+    } while (0)
 
+// cublas API error checking
+#define CUSPARSE_CHECK(err)                                                                        \
+    do {                                                                                           \
+        cusparseStatus_t err_ = (err);                                                             \
+        if (err_ != CUSPARSE_STATUS_SUCCESS) {                                                     \
+            printf("cusparse error %d at %s:%d\n", err_, __FILE__, __LINE__);                      \
+            throw std::runtime_error("cusparse error");                                            \
+        }                                                                                          \
+    } while (0)
 template <typename T> __device__ T warp_prefix_sum(T val) {
   // Computes parallel prefix on 32 elements using Hillis Steele Scan w/ warp
   // shuffle
@@ -92,22 +119,23 @@ void set_cuda_graph_triblock(
     // If no graph exists, capture one
     
     cudaGraph_t graph;
+    // cudaGraphCreate(&graph, 0); // Removed redundant creation
     
     // Start recording on the default stream
-    cudaStreamBeginCapture(0, cudaStreamCaptureModeGlobal);
+    CUDA_CHECK(cudaStreamBeginCapture(0, cudaStreamCaptureModeGlobal));
 
     // This code records nodes into the graph instead of launching
     kernel_launcher(N, block_n, in, out, workspace);
 
     // Stop recording
-    cudaStreamEndCapture(0, &graph);
+    CUDA_CHECK(cudaStreamEndCapture(0, &graph));
 
     // Create an executable graph from the recording
     // (This performs validation and sets up the launch structures)
-    cudaGraphInstantiate(instance_ptr, graph, nullptr, nullptr, 0);
+    CUDA_CHECK(cudaGraphInstantiate(instance_ptr, graph, nullptr, nullptr, 0));
 
     // Clean up the template graph (the Exec object owns the data now)
-    cudaGraphDestroy(graph);
+    CUDA_CHECK(cudaGraphDestroy(graph));
 }
 
 void launch_cuda_graph_triblock(cudaGraphExec_t *instance) {
@@ -121,43 +149,43 @@ void invalidate_cuda_graph_triblock(cudaGraphExec_t *instance) {
 }
 
 
-// void launch_cuda_graph_triblock(
-//   void (*kernel_launcher)(const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace),
-//   const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace
-// ) {
-//     // Invalidate graph if matrix size changes
-//     if (instance != nullptr && (N != last_n || block_n != last_block_n)) {
-//         cudaGraphExecDestroy(instance);
-//         instance = nullptr;
-//     }
+void launch_cuda_graph_triblock(
+  void (*kernel_launcher)(const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace),
+  const uint32_t N, const uint32_t block_n, float const *in, float *out, void *workspace
+) {
+    // Invalidate graph if matrix size changes
+    if (instance != nullptr && (N != last_n || block_n != last_block_n)) {
+        cudaGraphExecDestroy(instance);
+        instance = nullptr;
+    }
 
-//     // If no graph exists, capture one
-//     if (instance == nullptr) {
-//         cudaGraph_t graph;
+    // If no graph exists, capture one
+    if (instance == nullptr) {
+        cudaGraph_t graph;
         
-//         // Start recording on the default stream
-//         cudaStreamBeginCapture(0, cudaStreamCaptureModeGlobal);
+        // Start recording on the default stream
+        cudaStreamBeginCapture(0, cudaStreamCaptureModeGlobal);
 
-//         // This code records nodes into the graph instead of launching
-//         kernel_launcher(N, block_n, in, out, workspace);
+        // This code records nodes into the graph instead of launching
+        kernel_launcher(N, block_n, in, out, workspace);
 
-//         // Stop recording
-//         cudaStreamEndCapture(0, &graph);
+        // Stop recording
+        cudaStreamEndCapture(0, &graph);
 
-//         // Create an executable graph from the recording
-//         // (This performs validation and sets up the launch structures)
-//         cudaGraphInstantiate(&instance, graph, nullptr, nullptr, 0);
+        // Create an executable graph from the recording
+        // (This performs validation and sets up the launch structures)
+        cudaGraphInstantiate(&instance, graph, nullptr, nullptr, 0);
 
-//         // Clean up the template graph (the Exec object owns the data now)
-//         cudaGraphDestroy(graph);
+        // Clean up the template graph (the Exec object owns the data now)
+        cudaGraphDestroy(graph);
         
-//         last_n = N;
-//         last_block_n = block_n;
-//     }
+        last_n = N;
+        last_block_n = block_n;
+    }
 
-//     // Launch the cached graph
-//     // This issues all kernels in a single driver call
-//     cudaGraphLaunch(instance, 0);
-// }
+    // Launch the cached graph
+    // This issues all kernels in a single driver call
+    cudaGraphLaunch(instance, 0);
+}
 
 } // namespace utils

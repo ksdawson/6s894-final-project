@@ -57,7 +57,7 @@ void test_gemm_tensor(uint32_t N) {
     for (int i = 0; i < N; i++) {
         for (int j = 0; j <= i; j++) {
             A[i * N + j] = (float)(rand() % 2 + 1); // positive
-            //A[j * N + i] = A[i * N + j];
+            A[j * N + i] = A[i * N + j];
 
             // A[i * N + j] = 0.0f;    
             // A[j * N + i] = 0.0f;
@@ -91,11 +91,6 @@ void test_gemm_tensor(uint32_t N) {
 
     CUDA_CHECK(cudaMemcpy(X_gpu, X_d, N * N * sizeof(float), cudaMemcpyDeviceToHost));
 
-    for (int i = 0; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-            printf("X_true[%d, %d] = %f, X_gpu[%d, %d] = %f\n", i, j, X_true[i * N + j], i, j, X_gpu[i * N + j]);
-        }
-    }
 
     bool failed = false;
     float tol = 1e-3f;
@@ -106,6 +101,7 @@ void test_gemm_tensor(uint32_t N) {
             mse += diff * diff;
             if (std::abs(diff) > tol) {
                 failed = true;
+                printf("X_true[%d, %d] = %f, X_gpu[%d, %d] = %f\n", i, j, X_true[i * N + j], i, j, X_gpu[i * N + j]);
             }
         }
     }
@@ -192,7 +188,8 @@ void test_triblock(uint32_t N, uint32_t block_n) {
     // Launch kernel (1 block, multiple warps)
     //triblock_small::launch_cholesky_trsm_combined(N, block_n, A_d, X_d);
     //triblock_small::launch_triblock_small(N, block_n, A_d, X_d, nullptr);
-    triblock::launch_triblock(N, block_n, A_d, X_d, nullptr);
+    // triblock::launch_triblock(N, block_n, A_d, X_d, nullptr);
+    triblock::launch_triblock_tensor(N, block_n, A_d, X_d, nullptr);
 
     CUDA_CHECK(cudaDeviceSynchronize());
 
@@ -213,13 +210,14 @@ void test_triblock(uint32_t N, uint32_t block_n) {
                 failed = true;
             }
             ref_mean_square += X_true[i * N + j] * X_true[i * N + j];
+            
         }
     }
     mse /= N * N;
     ref_mean_square /= N * N;
-    float rmse = std::sqrt(mse);
-    float rel_rmse = rmse / std::sqrt(ref_mean_square);
-    printf("RMSE = %f, REL_RMSE = %f\n", rmse, rel_rmse);
+    double rmse = std::sqrt(mse);
+    double rel_rmse = rmse / std::sqrt(ref_mean_square);
+    printf("RMSE = %8.02e, REL_RMSE = %8.02e\n", rmse, rel_rmse);
 
     // for (uint32_t i = 0; i < N; ++i) {
     //     for (uint32_t j = 0; j < N; ++j) {
@@ -278,15 +276,15 @@ int main() {
     // test_triblock(256, 128);
     // test_triblock(512, 128);
 
-    // test_triblock(1024, 128);
-    // test_triblock(1024, 128);
-    // test_triblock(1024, 256);
-    // test_triblock(1024, 512);
-    // test_triblock(1024, 1024);
+    test_triblock(1024, 128);
+    test_triblock(1024, 128);
+    test_triblock(1024, 256);
+    test_triblock(1024, 512);
+    test_triblock(1024, 1024);
 
     // test_triblock(2048, 64);
     // test_triblock(2048, 128);
-    //test_triblock(2048, 512);
+    // test_triblock(2048, 512);
     // test_triblock(2048, 1024);
 
     //test_triblock(2048, 32);
@@ -294,7 +292,7 @@ int main() {
     // test_triblock(256, 128);
     // test_triblock(512, 256);
 
-    test_gemm_tensor(32);
+    // test_gemm_tensor(256);
     return 0;
 }
 

@@ -177,7 +177,8 @@ void buildTriangularSolverGraph(cudaGraph_t &graph, int num_blocks,
   for (int i = 0; i < num_blocks - 1; i++)
     subtract_nodes[i].resize(i + 1);
 
-  dim3 gridDim(k_stride / blocksize);
+  //dim3 gridDim(k_stride / blocksize);
+  dim3 gridDim((k_stride + blocksize - 1) / blocksize);
   dim3 blockDim(blocksize * blocksize > 1024
                     ? 1024
                     : blocksize * blocksize); // NOTE: may be unnecessary

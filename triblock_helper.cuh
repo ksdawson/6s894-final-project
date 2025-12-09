@@ -182,6 +182,89 @@ __device__ void triblock_trsm_update(const float *B_ij, const float *A_j, const 
   __syncthreads();
 }   
 
+// asumes A_n == X_n!!!
+template <uint32_t m, uint32_t W_TH, uint32_t r>
+__device__ void triblock_trsm_tensor_update(const float *B_ij, const float *A_j, const float *X_i, 
+  float *reg, 
+  float *smem1, float *smem2, float *smem3, 
+  const uint32_t A_n, const uint32_t X_n, const uint32_t B_n, 
+  const uint32_t j) {
+
+  constexpr uint32_t warp_H = 16;
+  constexpr uint32_t warp_W = 8;
+
+  const uint32_t warp_ID = threadIdx.x / 32;
+  const uint32_t warp_tile_i = warp_ID / 4;
+  const uint32_t warp_tile_j = warp_ID % 4; // assuming 8 warps, so 2x4 tiles in block
+
+  uint32_t *reg_Xik = reinterpret_cast<uint32_t*>(reg);
+  uint32_t *reg_Ajk = reinterpret_cast<uint32_t*>(reg + 4 * W_TH);
+  float *reg_Bij = reg + 6 * W_TH;
+
+  for (int32_t k = 0; k < j; ++k) {
+    // save A_tjj, X_tj into smem
+    const float *A_jk = A_j + k * r;
+    const float *X_ik = X_i + k * r;
+    block_cholesky_space::gmem_to_smem(A_jk, X_ik, smem1, smem2, A_n, r);
+
+    // call block gemm
+    gemm::gemm_tensor_warp<W_TH, m>(smem2, smem1, reg_Xik, reg_Ajk, reg_Bij, warp_tile_i, warp_tile_j, r);
+    __syncthreads();
+  }
+
+  const float *B_ij_warp = B_ij + warp_tile_i * warp_H * W_TH * B_n + warp_tile_j * warp_W * W_TH;
+  float *smem3_warp = smem3 + warp_tile_i * warp_H * W_TH * r + warp_tile_j * warp_W * W_TH;
+
+  for (int32_t wi = 0; wi < W_TH; ++wi) {
+    for (int32_t wj = 0; wj < W_TH; ++wj) {
+      const float *B_ij_warp_subtile = B_ij_warp + wi * warp_H * B_n + wj * warp_W;
+      float *smem3_warp_subtile = smem3_warp + wi * warp_H * r + wj * warp_W;
+      float *reg_Bij_subtile = reg_Bij + (wi * W_TH + wj) * 4;
+      
+      gemm::gemm_tensor_copytomem(smem3_warp_subtile, B_ij_warp_subtile, reg_Bij_subtile, r, B_n);
+    }
+  }
+  __syncthreads();
+}
+
+template <uint32_t m, uint32_t W_TH, uint32_t r>
+__global__ void triblock_trsm_tensor (float const *A, float *X, const float *B,
+  const uint32_t A_n, const uint32_t X_n, const uint32_t B_n,
+  const uint32_t block_n
+) {
+  
+  extern __shared__ float smem[];
+  float *smem1 = smem;
+  float *smem2 = smem + r * r;
+  float *smem3 = smem + r * r * 2;
+  const bool valid_block = blockIdx.x < (block_n / r);
+
+  if (valid_block) {
+    // Calculate X, B pointers
+    float *X_i = X + r * blockIdx.x * X_n; // rows of X
+    const float *B_i = B + r * blockIdx.x * B_n; // rows of B
+
+  // loop through rows in steps of r to calculate trsm
+    for (uint32_t j = 0; j < (int)(block_n / r); ++j) {
+      float reg[6*W_TH + 4*W_TH*W_TH] = {0.0f};
+
+      // find column of X we are calculating for
+      const float *B_ij = B_i + j * r; // column of B_i
+      const float *A_j = A + j * r* A_n; // rows of A
+
+      // GEMM update on B (store in smem3)
+      triblock_trsm_tensor_update<m, W_TH, r>(B_ij, A_j, X_i, reg, smem1, smem2, smem3, A_n, X_n, B_n, j);
+      
+      // call block trsm
+      const float *A_jj = block_cholesky_space::get_block(A, j, j, A_n, r);
+      float *X_ij = X_i + j * r; // column of X_i
+      block_cholesky_space::gmem_to_smem(A_jj, smem1, A_n, r);
+      trsm_small::block_trsm(smem1, smem2, smem3, r, r, r, r);
+
+      block_cholesky_space::smem_to_gmem(X_ij, smem2, X_n, r);
+    }
+  }
+}
 
 template <uint32_t T_TH, uint32_t r>
 __global__ void triblock_block_trsm (float const *A, float *X, const float *B,
