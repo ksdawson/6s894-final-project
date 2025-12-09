@@ -257,17 +257,25 @@ double tflops_trsm_vec(int32_t size) {
 }
 
 double tflops_gemm(int32_t size) {
-    double num_fma = (double)size * size * size * 2.0; 
+    double num_fma = (double)size * size * (size+1); 
     double tflops = num_fma * 1e-12;
     return tflops;
 }
 
 double tflops_triblock(int32_t size, int32_t block_size) {
     int32_t num_blocks = (int32_t)(size / block_size);
-    double tf_chol = tflops_cholesky(block_size) * num_blocks;
-    double tf_trsm = tflops_trsm(block_size) * (num_blocks - 1);
-    double tf_GEMMs = tflops_gemm(block_size) * (num_blocks - 1); // This logic might be approximation for blocked cholesky
-    double tflops = tf_chol + tf_trsm + tf_GEMMs;
+    // double tf_chol = tflops_cholesky(block_size) * num_blocks;
+    // double tf_trsm = tflops_trsm(block_size) * (num_blocks - 1);
+    // double tf_GEMMs = tflops_gemm(block_size) * (num_blocks - 1); // This logic might be approximation for blocked cholesky
+    // double tflops = tf_chol + tf_trsm + tf_GEMMs;
+    // double num_sqrts = (double)size;
+    // double num_divs = (double)(2*block_size-1)*(2*block_size)*(2*block_size+1)/3;
+    // double num_fma = (double)num_blocks*block_size*(block_size-1)*(4*block_size-1)/3 + (double)num_blocks*block_size*(block_size-1)*block_size/3;
+    double num_sqrts = (double)size;
+    double num_divs = (double)num_blocks*block_size*(block_size-1)/2 + (num_blocks-1)*block_size*block_size;
+    double num_fma = (double)2*num_blocks*block_size*(block_size-1)*(block_size+1)/6 + (double)2*(num_blocks-1)*block_size*block_size*block_size;
+    double num_ops = num_sqrts + num_divs + num_fma;
+    double tflops = num_ops * 1e-12;
     return tflops;
 }
 

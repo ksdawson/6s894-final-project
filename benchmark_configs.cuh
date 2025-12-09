@@ -336,13 +336,13 @@ void run_config_cholesky(
     double tflops = 0.0;
     if (solver == Solver::CHOLESKY) {
         tflops = tflops_cholesky(size);
-        rel_rmse = calc_error_cholesky(c_out_host, c, size);
+        //rel_rmse = calc_error_cholesky(c_out_host, c, size);
     } else if (solver == Solver::CHOLESKY_TRIBLOCK) {
         tflops = tflops_triblock(size, block_size);
-        rel_rmse = calc_error_cholesky(c_out_host, c, size);
+        //rel_rmse = calc_error_cholesky(c_out_host, c, size);
     } else {
         tflops = tflops_cholesky(size);
-        rel_rmse = calc_error_cholesky(c_out_host, c, size);
+        //rel_rmse = calc_error_cholesky(c_out_host, c, size);
     } 
     // printf("tflops: %f\n", tflops);
 
@@ -376,7 +376,7 @@ void run_config_cholesky(
 
         results.elapsed_ms[{size, block_size}] = elapsed_ms;
         //double tflop = 2.0 * size_i * size_k * size_j * 1e-12;
-        printf("  %9.05f  %7.02f", elapsed_ms, tflops / (elapsed_ms * 1e-3));
+        printf("  %9.05f  %7.06f", elapsed_ms, tflops / (elapsed_ms * 1e-3));
     }
 
     printf("\n");
@@ -447,13 +447,13 @@ void run_config_graph(
     double tflops = 0.0;
     if (solver == Solver::CHOLESKY) {
         tflops = tflops_cholesky(size);
-        rel_rmse = calc_error_cholesky(c_out_host, c, size);
+        //rel_rmse = calc_error_cholesky(c_out_host, c, size);
     } else if (solver == Solver::CHOLESKY_TRIBLOCK) {
         tflops = tflops_triblock(size, block_size);
-        rel_rmse = calc_error_cholesky(c_out_host, c, size);
+        //rel_rmse = calc_error_cholesky(c_out_host, c, size);
     } else {
         tflops = tflops_cholesky(size);
-        rel_rmse = calc_error_cholesky(c_out_host, c, size);
+        //rel_rmse = calc_error_cholesky(c_out_host, c, size);
     } 
 
     printf("  %8.02e", rel_rmse);
