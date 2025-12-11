@@ -67,6 +67,7 @@ template <typename T> __device__ T warp_prefix_sum(T val) {
 static cudaGraphExec_t instance = nullptr;
 static uint32_t last_n = 0;
 static uint32_t last_block_n = 0;
+static bool instance_created = false;
 
 void launch_cuda_graph(
   void (*kernel_launcher)(const uint32_t n, float const *in, float *out, void *workspace),
@@ -74,14 +75,15 @@ void launch_cuda_graph(
 ) {
     // Invalidate graph if matrix size changes
     if (instance != nullptr && n != last_n) {
+        printf("Invalidating graph\n");
         cudaGraphExecDestroy(instance);
         instance = nullptr;
     }
 
     // If no graph exists, capture one
-    if (instance == nullptr) {
-        printf("Capturing graph\n");
-        printf("N: %d, last_n: %d\n", n, last_n);
+    if (!instance_created) {
+        // printf("Capturing graph\n");
+        // printf("N: %d, last_n: %d\n", n, last_n);
         cudaGraph_t graph;
         
         // Start recording on the default stream
@@ -101,6 +103,7 @@ void launch_cuda_graph(
         cudaGraphDestroy(graph);
         
         last_n = n;
+        instance_created = true;
     }
 
     // Launch the cached graph
@@ -163,8 +166,8 @@ void launch_cuda_graph_triblock(
 
     // If no graph exists, capture one
     if (instance == nullptr) {
-        printf("Capturing graph\n");
-        printf("N: %d, block_n: %d, last_n: %d, last_block_n: %d\n", N, block_n, last_n, last_block_n);
+        // printf("Capturing graph\n");
+        // printf("N: %d, block_n: %d, last_n: %d, last_block_n: %d\n", N, block_n, last_n, last_block_n);
         cudaGraph_t graph;
         
         // Start recording on the default stream
