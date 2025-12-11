@@ -81,9 +81,7 @@ void launch_cuda_graph(
     }
 
     // If no graph exists, capture one
-    if (!instance_created) {
-        // printf("Capturing graph\n");
-        // printf("N: %d, last_n: %d\n", n, last_n);
+    if (instance == nullptr) {
         cudaGraph_t graph;
         
         // Start recording on the default stream
@@ -166,8 +164,6 @@ void launch_cuda_graph_triblock(
 
     // If no graph exists, capture one
     if (instance == nullptr) {
-        // printf("Capturing graph\n");
-        // printf("N: %d, block_n: %d, last_n: %d, last_block_n: %d\n", N, block_n, last_n, last_block_n);
         cudaGraph_t graph;
         
         // Start recording on the default stream
